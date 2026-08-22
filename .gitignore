@@ -216,3 +216,32 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ==============================================================
+# AI Assistant dịch thuật — bảo mật dữ liệu khách hàng
+# Xem mục "Bảo mật & quyền riêng tư" trong _specs/mvp-spec.md
+# ==============================================================
+
+# Toàn bộ dữ liệu chạy máy: SQLite, ChromaDB, tài liệu đã nạp,
+# bản ghi âm, cache audio TTS. KHÔNG commit.
+/data/*
+# Giữ lại duy nhất manifest của bộ tài liệu kiểm thử,
+# bản thân các tệp tài liệu thì không commit.
+!/data/test_documents/
+/data/test_documents/*
+!/data/test_documents/README.md
+
+# Lưới an toàn: tài liệu khách hàng lỡ để ngoài /data cũng không bị commit.
+# Cần commit một tệp cụ thể thì dùng: git add -f <đường dẫn>
+*.doc
+*.docx
+*.pdf
+
+# Bản ghi âm giọng chuyên gia và audio do TTS sinh
+*.wav
+*.mp3
+*.m4a
+*.ogg
+
+# Cloudflared binary (52 MB) — tai lai bang: xem tunnel.ps1
+tools/

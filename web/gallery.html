@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mẫu thiết kế — Trợ lý phiên dịch</title>
+    <meta name="color-scheme" content="light dark" />
+    <link rel="stylesheet" href="static/css/tokens.css" />
+    <link rel="stylesheet" href="static/css/base.css" />
+    <link rel="stylesheet" href="static/css/components.css" />
+    <link rel="stylesheet" href="static/css/screens.css" />
+    <style>
+      .gal { max-width: 980px; margin: 0 auto; padding: var(--s-6) var(--s-5) var(--s-8); }
+      .gal section { margin-bottom: var(--s-8); }
+      .gal h2 {
+        padding-bottom: var(--s-2);
+        border-bottom: 1px solid var(--line);
+        margin-bottom: var(--s-4);
+      }
+      .gal .why {
+        font-size: var(--t-sm);
+        color: var(--ink-2);
+        max-width: 70ch;
+        margin-bottom: var(--s-4);
+      }
+      .swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: var(--s-3); }
+      .sw { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--surface); }
+      .sw .chip { height: 54px; }
+      .sw .meta { padding: var(--s-2) var(--s-3); font-size: var(--t-xs); }
+      .sw .meta b { display: block; }
+      .sw .meta code { color: var(--ink-3); font-size: var(--t-micro); }
+      .type-row { padding: var(--s-2) 0; border-bottom: 1px solid var(--line); }
+      .type-row:last-child { border-bottom: 0; }
+      .type-row .tag {
+        font-family: var(--font-mono); font-size: var(--t-micro);
+        color: var(--ink-4); display: block; margin-bottom: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="gal" id="gal"></div>
+    <script type="module" src="js/gallery.js"></script>
+  </body>
+</html>

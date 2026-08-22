@@ -1,0 +1,282 @@
+/* ============================================================================
+ * BASE — reset, typography, và bố cục khung (rail trái + vùng nội dung).
+ * ========================================================================= */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  line-height: var(--lh-body);
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* Bỏ độ trễ 300ms chờ double-tap trên cảm ứng */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  color: var(--ink);
+  line-height: var(--lh-tight);
+  /* Không để chữ cuối của tiêu đề rơi một mình xuống dòng */
+  text-wrap: balance;
+  /* Nhảy tới neo trong trang thì tiêu đề không dính sát mép trên */
+  scroll-margin-top: var(--s-5);
+}
+h1 {
+  font-size: var(--t-h1);
+  font-weight: 900;
+  letter-spacing: var(--tr-head);
+}
+h2 {
+  font-size: var(--t-h2);
+  font-weight: 700;
+  letter-spacing: var(--tr-head);
+}
+h3 {
+  font-size: var(--t-h3);
+  font-weight: 700;
+}
+
+p {
+  margin: 0 0 var(--s-3);
+}
+p:last-child {
+  margin-bottom: 0;
+}
+
+a {
+  color: var(--vi);
+  text-decoration-color: color-mix(in srgb, var(--vi) 35%, transparent);
+  text-underline-offset: 2px;
+}
+@media (hover: hover) and (pointer: fine) {
+  a:hover {
+    text-decoration-color: currentColor;
+  }
+}
+
+code,
+kbd,
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  font-variant-numeric: tabular-nums;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: var(--s-6) 0;
+}
+
+/* Vòng focus thấy được ở mọi nơi — điều hướng bàn phím phải biết mình đang ở đâu */
+:focus-visible {
+  outline: 2px solid var(--vi);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+
+/* Chỉ hiện cho người dùng bàn phím, nhảy thẳng vào nội dung chính */
+.skip-link {
+  position: absolute;
+  left: var(--s-3);
+  top: -100px;
+  z-index: 100;
+  padding: var(--s-2) var(--s-4);
+  background: var(--vi);
+  color: #fff;
+  border-radius: var(--r-sm);
+  font-weight: 600;
+  transition: top var(--d-state) var(--ease-out);
+}
+.skip-link:focus {
+  top: var(--s-3);
+}
+
+/* ============================== Khung ============================== */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  min-height: 100vh;
+}
+
+/* Màn Mock chạy toàn khung: bỏ rail, không còn chrome nào.
+ * Đây là điểm khác biệt lớn nhất so với một biểu mẫu.
+ *
+ * PHẢI khai báo MỘT cột, không phải `0 1fr`. Vì `.rail` bị `display:none` nên nó bị loại
+ * khỏi grid hoàn toàn, và `.content` sẽ được tự động đặt vào cột ĐẦU TIÊN. Nếu cột đầu là
+ * `0` thì cột nội dung rộng 0px, cộng với `min-width:0` bên dưới là co về đúng một ký tự
+ * mỗi dòng. Đây là lỗi đã thực sự xảy ra một lần — đừng đổi lại. */
+.app[data-chrome="off"] {
+  grid-template-columns: 1fr;
+}
+.app[data-chrome="off"] .rail {
+  display: none;
+}
+
+.content {
+  min-width: 0; /* cho phép con bên trong cuộn ngang mà không đẩy layout */
+  padding: var(--s-6) var(--s-6) var(--s-8);
+}
+.content-inner {
+  max-width: var(--content-max);
+  margin: 0 auto;
+}
+
+/* ============================== Rail trái ============================== */
+
+.rail {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-4) var(--s-3);
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+
+.rail-brand {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-2) var(--s-4);
+}
+.rail-brand .mark {
+  font-weight: 900;
+  font-size: 1.15rem;
+  letter-spacing: var(--tr-display);
+  color: var(--ink);
+}
+/* Mũi tên VI→EN trong logo: nhắc lại chính trục của sản phẩm */
+.rail-brand .axis {
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-3);
+  letter-spacing: 0.06em;
+}
+
+.rail-section {
+  padding: var(--s-4) var(--s-2) var(--s-1);
+  font-size: var(--t-micro);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+
+.rail-link {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--t-sm);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--d-state) var(--ease-out),
+    color var(--d-state) var(--ease-out);
+}
+.rail-link .ico {
+  width: 1.15rem;
+  text-align: center;
+  flex: none;
+  font-size: 0.95rem;
+}
+@media (hover: hover) and (pointer: fine) {
+  .rail-link:hover {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+}
+.rail-link[aria-current="page"] {
+  background: var(--vi-soft);
+  color: var(--vi);
+  font-weight: 700;
+}
+.rail-link .count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+}
+
+.rail-foot {
+  margin-top: auto;
+  padding: var(--s-3) var(--s-2) 0;
+  border-top: 1px solid var(--line);
+  font-size: var(--t-micro);
+  color: var(--ink-4);
+  line-height: var(--lh-snug);
+}
+
+/* ============================== Đáp ứng ============================== */
+
+@media (max-width: 940px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+  .rail {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .rail-section,
+  .rail-foot {
+    display: none;
+  }
+  .rail-link {
+    width: auto;
+  }
+  .rail-link .count {
+    display: none;
+  }
+  .content {
+    padding: var(--s-4);
+  }
+}
+
+/* ============================== Giảm chuyển động ==============================
+ * Giảm chứ không tắt sạch: giữ đổi màu và opacity vì chúng giúp hiểu giao diện,
+ * chỉ bỏ phần dịch chuyển vị trí. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

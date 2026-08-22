@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trợ lý phiên dịch — Việt ⇄ Anh</title>
+    <meta
+      name="description"
+      content="Công cụ chuẩn bị buổi dịch: tổng hợp tài liệu, nghiên cứu khách hàng, luyện dịch hai chiều có chấm điểm."
+    />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Khớp màu thanh trình duyệt với nền trang, cả hai chế độ -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fafbfd" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a1220" />
+
+    <!-- Nạp trước hai font hay dùng nhất để chữ không nhảy khi trang hiện -->
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href="static/fonts/be-vietnam-pro-latin-400-normal.woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href="static/fonts/be-vietnam-pro-vietnamese-400-normal.woff2"
+      crossorigin
+    />
+
+    <link rel="stylesheet" href="static/css/tokens.css" />
+    <link rel="stylesheet" href="static/css/base.css" />
+    <link rel="stylesheet" href="static/css/components.css" />
+    <link rel="stylesheet" href="static/css/screens.css" />
+  </head>
+
+  <body>
+    <a class="skip-link" href="#main">Bỏ qua điều hướng, vào nội dung chính</a>
+
+    <div class="app" id="app" data-chrome="on">
+      <nav class="rail" id="rail" aria-label="Điều hướng chính"></nav>
+      <main class="content" id="main" tabindex="-1">
+        <div class="content-inner" id="screen">
+          <div class="loading-row"><span class="spinner"></span><span>Đang khởi động…</span></div>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>
