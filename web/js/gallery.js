@@ -235,15 +235,9 @@ gal.append(
               "nên trần kỹ thuật là 15 lượt).",
             payload_known: true, n_chars: 3462,
             payload_excerpt:
-              "CHIỀU DỊCH: tiếng Việt → tiếng Anh
-
-=== LỜI NGƯỜI NÓI ===
-" +
-              "Báo cáo với ông Walker, dự án lần này có tổng giá trị tài trợ là 6.780.000.000 đồng…
-
-" +
-              "=== BẢN DỊCH CỦA CHUYÊN GIA ===
-Reporting to Mr. Walker, this project has…",
+                "CHIỀU DỊCH: tiếng Việt → tiếng Anh\n\n=== LỜI NGƯỜI NÓI ===\n" +
+                "Báo cáo với ông Walker, dự án lần này có tổng giá trị tài trợ là 6.780.000.000 đồng…\n\n" +
+                "=== BẢN DỊCH CỦA CHUYÊN GIA ===\nReporting to Mr. Walker, this project has…",
           }).then((v) => toast(v ? "ok" : "warn",
             v ? `Đã cho phép (${v}).` : "Đã từ chối — không gửi gì.")) }),
         // Thao tác NHIỀU lệnh gọi: chưa biết nội dung, phải nói thẳng thay vì hiện khung rỗng.
