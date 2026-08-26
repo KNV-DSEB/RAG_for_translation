@@ -91,21 +91,24 @@ function profileField(item, reload) {
       el(
         "div",
         { style: "margin-top:8px;display:flex;gap:6px;flex-wrap:wrap" },
-        sources.map((source) => {
-          const dead = source.reachable === "dead";
-          const blocked = source.reachable === "blocked";
-          return el("a.citation", {
+        // KHÔNG còn nhãn "liên kết hỏng" / "chặn truy cập".
+        //
+        // Chúng đến từ `check_urls_reachable()` — một đường mạng đi vòng qua cửa egress,
+        // đã bị xoá. Giữ phần hiển thị lại thì hai điều cùng sai: dữ liệu cũ đóng băng
+        // vĩnh viễn (không gì cập nhật nó nữa), và bản thân phép đo vốn đã hay sai —
+        // Wikipedia, thuvienphapluat.vn trả 403 cho máy nhưng mở bằng trình duyệt vẫn
+        // bình thường. Gắn nhãn "chết" cho nguồn tốt làm chuyên gia mất tin vào nguồn đúng.
+        sources.map((source) =>
+          el("a.citation", {
             href: source.url,
             target: "_blank",
             rel: "noopener noreferrer",
             title: source.title || source.url,
-            style: dead ? "opacity:.55;text-decoration:line-through" : "",
             text:
               hostOf(source.url) +
-              (source.published_at ? ` · ${String(source.published_at).slice(0, 10)}` : "") +
-              (dead ? " · liên kết hỏng" : blocked ? " · chặn truy cập" : ""),
-          });
-        })
+              (source.published_at ? ` · ${String(source.published_at).slice(0, 10)}` : ""),
+          })
+        )
       )
     );
   } else if (!item.has_source) {

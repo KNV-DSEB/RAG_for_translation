@@ -69,9 +69,16 @@ def get_context(workspace_id: int = Query(...)) -> dict[str, Any]:
               (SELECT COUNT(*) FROM glossary  WHERE workspace_id = ? AND status <> 'skipped') AS n_terms,
               (SELECT COUNT(*) FROM glossary  WHERE workspace_id = ? AND status = 'expert_edited') AS n_expert_terms,
               (SELECT COUNT(*) FROM glossary  WHERE workspace_id = ? AND confidence='aligned_from_parallel') AS n_human_terms,
-              (SELECT COUNT(*) FROM profiles  WHERE workspace_id = ?)                     AS n_profiles
+              (SELECT COUNT(*) FROM profiles  WHERE workspace_id = ?)                     AS n_profiles,
+              -- Đếm riêng trường hồ sơ KHÔNG được đưa vào kịch bản, để chuyên gia biết
+              -- mình đang mất gì và vì sao (xem `generator._profile_text`).
+              (SELECT COUNT(*) FROM profile_fields f JOIN profiles p ON p.id = f.profile_id
+                WHERE p.workspace_id = ?)                                                 AS n_fields,
+              (SELECT COUNT(*) FROM profile_fields f JOIN profiles p ON p.id = f.profile_id
+                WHERE p.workspace_id = ? AND f.has_source = 0
+                  AND f.is_expert_edited = 0)                                             AS n_fields_unsourced
             """,
-            (workspace_id,) * 6,
+            (workspace_id,) * 8,
         ).fetchone()
 
         entities = conn.execute(

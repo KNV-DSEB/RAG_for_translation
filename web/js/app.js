@@ -114,10 +114,16 @@ function buildRail() {
 
 /* ============================== Khởi động ============================== */
 
-function applyChrome(key) {
-  // Màn Mock chạy toàn khung: bỏ rail để không còn gì phân tán khi đang luyện
+function applyChrome(key, params) {
+  // Màn Mock chạy toàn khung để không còn gì phân tán khi đang luyện.
+  //
+  // Nhưng CHỈ khi đang thật sự trong một buổi (`?session=…`). Ở màn cấu hình thì chuyên
+  // gia mới đang điền biểu mẫu, chưa chịu áp lực gì — mà rail bị ẩn ở đó lại tạo ngõ cụt:
+  // nút “← Thoát” chỉ có trong buổi đang chạy và trong báo cáo, nên vào Mock từ rail là
+  // không còn đường ra nào ngoài nút back của trình duyệt.
+  const inSession = key === "mock" && Boolean(params?.session);
   const app = document.getElementById("app");
-  app.dataset.chrome = key === "mock" ? "off" : "on";
+  app.dataset.chrome = inSession ? "off" : "on";
 }
 
 function secretBanner() {
@@ -144,8 +150,8 @@ async function main() {
   });
 
   router.setContainer(document.getElementById("screen"));
-  router.onRouteChange((key) => {
-    applyChrome(key);
+  router.onRouteChange((key, _screen, params) => {
+    applyChrome(key, params);
     buildRail();
     // Dải nhắc hồ sơ mật chạy sau khi màn hình vẽ xong
     setTimeout(secretBanner, 0);

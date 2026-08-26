@@ -255,3 +255,6 @@ tools/
 
 # Log chạy thử của uvicorn
 .uvicorn.log
+
+# Ảnh chụp của bộ rà giao diện (tools/visual_qa.py) — sinh lại được, không commit
+.qa/

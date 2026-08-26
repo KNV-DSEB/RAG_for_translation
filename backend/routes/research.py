@@ -146,7 +146,7 @@ def get_profiles(workspace_id: int = Query(...)) -> list[dict[str, Any]]:
             for item in fields:
                 sources = conn.execute(
                     """
-                    SELECT url, title, published_at, reachable
+                    SELECT url, title, published_at
                     FROM profile_sources WHERE profile_field_id = ?
                     """,
                     (int(item["id"]),),

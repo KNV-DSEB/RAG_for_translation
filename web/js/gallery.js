@@ -222,16 +222,48 @@ gal.append(
           detail: "Điểm đã chấm và bản chữ vẫn được giữ nguyên.",
           confirmLabel: "Xoá 8 bản ghi",
         }).then((v) => toast(v ? "ok" : "warn", v ? "Đã xoá 8 bản ghi âm." : "Đã huỷ, không xoá gì.")) }),
-      el("button.btn", { type: "button", text: "Thử cổng đồng ý hồ sơ mật",
-        onclick: () => consentDialog({
-          workspace_name: "Latter-Day Saint Charities",
-          destination: "llm", endpoint: "gemini:gemini-3.5-flash",
-          module: "simulation.score", n_chars: 3462,
-          payload_excerpt:
-            "CHIỀU DỊCH: tiếng Việt → tiếng Anh\n\n=== LỜI NGƯỜI NÓI ===\n" +
-            "Báo cáo với ông Walker, dự án lần này có tổng giá trị tài trợ là 6.780.000.000 đồng…\n\n" +
-            "=== BẢN DỊCH CỦA CHUYÊN GIA ===\nReporting to Mr. Walker, this project has…",
-        }).then((v) => toast(v ? "ok" : "warn", v ? "Đã đồng ý cho cả buổi." : "Đã từ chối — không gửi gì.")) }),
+        // Thao tác MỘT lệnh gọi: biết trước nội dung nên hiện đủ, không cắt.
+        el("button.btn", { type: "button", text: "Cổng đồng ý — biết trước nội dung",
+          onclick: () => consentDialog({
+            workspace_name: "Latter-Day Saint Charities",
+            operation_kind: "simulate.score",
+            declares: [{ provider_label: "Gemini (Google)", destination_label: "mô hình ngôn ngữ",
+                         unit_calls: 1, max_calls: 15 }],
+            scope_note:
+              "Thao tác này sẽ gửi dữ liệu ra ngoài: tối đa 1 lần tới Gemini (Google) " +
+              "(gửi lại cùng nội dung đó tối đa 14 lần nếu nhà cung cấp bận hoặc hết hạn mức, " +
+              "nên trần kỹ thuật là 15 lượt).",
+            payload_known: true, n_chars: 3462,
+            payload_excerpt:
+              "CHIỀU DỊCH: tiếng Việt → tiếng Anh
+
+=== LỜI NGƯỜI NÓI ===
+" +
+              "Báo cáo với ông Walker, dự án lần này có tổng giá trị tài trợ là 6.780.000.000 đồng…
+
+" +
+              "=== BẢN DỊCH CỦA CHUYÊN GIA ===
+Reporting to Mr. Walker, this project has…",
+          }).then((v) => toast(v ? "ok" : "warn",
+            v ? `Đã cho phép (${v}).` : "Đã từ chối — không gửi gì.")) }),
+        // Thao tác NHIỀU lệnh gọi: chưa biết nội dung, phải nói thẳng thay vì hiện khung rỗng.
+        el("button.btn", { type: "button", text: "Cổng đồng ý — chưa biết trước nội dung",
+          onclick: () => consentDialog({
+            workspace_name: "Latter-Day Saint Charities",
+            operation_kind: "research.run",
+            declares: [
+              { provider_label: "DuckDuckGo", destination_label: "tìm kiếm web",
+                unit_calls: 8, max_calls: 24 },
+              { provider_label: "Gemini (Google)", destination_label: "mô hình ngôn ngữ",
+                unit_calls: 5, max_calls: 75 },
+            ],
+            scope_note:
+              "Thao tác này sẽ gửi dữ liệu ra ngoài: tối đa 8 lần tới DuckDuckGo, tối đa 5 lần " +
+              "tới Gemini (Google). Nội dung từng lần do các bước bên trong sinh ra nên chưa " +
+              "hiện được ở đây — mọi lần gửi đều được ghi vào Nhật ký Bảo mật để bạn soi lại.",
+            payload_known: false, n_chars: 0, payload_excerpt: "",
+          }).then((v) => toast(v ? "ok" : "warn",
+            v ? `Đã cho phép (${v}).` : "Đã từ chối — không gửi gì.")) }),
       el("button.btn", { type: "button", text: "Thử toast", onclick: () => toast("ok", "Đã lưu.") }))),
 
   section("Trạng thái rỗng", "Màn hình rỗng là lời mời hành động, không phải chỗ báo lỗi.",

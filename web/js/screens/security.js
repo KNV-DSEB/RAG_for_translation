@@ -18,6 +18,36 @@ const DEST = {
   tts: "E3 · đọc lời thoại",
 };
 
+/**
+ * Nhãn trạng thái của một lần gửi.
+ *
+ * Ba mức, không phải hai, vì chỉ có ba điều ta thật sự biết:
+ *   bị chặn            — chưa hề chạm mạng
+ *   đã gửi, có phản hồi — nhà cung cấp trả lời bình thường
+ *   đã gửi, lỗi         — ĐÃ cố gửi rồi hỏng; KHÔNG kết luận được dữ liệu đã đi hay chưa,
+ *                         nên tuyệt đối không được hiện như "chưa gửi"
+ */
+const DEST_LABEL = { llm: "LLM", search: "Tìm kiếm", tts: "Lời thoại" };
+
+function statusBadge(row) {
+  const status = String(row.status ?? "");
+  if (status === "blocked") {
+    return el("span.badge.badge-mute", { text: "bị chặn", title: "Chưa có gì rời khỏi máy." });
+  }
+  if (status === "attempt_failed") {
+    return el("span.badge.badge-flag", {
+      text: "đã gửi, lỗi",
+      title:
+        `Đã cố gửi rồi hỏng (${row.error_class ?? "không rõ"}). Không kết luận được dữ ` +
+        "liệu đã ra ngoài hay chưa, nên vẫn tính là đã gửi.",
+    });
+  }
+  return el("span.badge.badge-ok", {
+    text: "đã gửi, có phản hồi",
+    title: "Nhà cung cấp trả lời bình thường.",
+  });
+}
+
 export async function render(root) {
   const current = store.currentWorkspace();
 
@@ -71,12 +101,19 @@ export async function render(root) {
             "div",
             { style: "margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center" },
             el("span", { style: "font-size:var(--t-sm)", text: "Vé đồng ý hiện tại:" }),
-            el(`span.badge.${consent.has_llm_consent ? "badge-ok" : "badge-warn"}`, {
-              text: consent.has_llm_consent ? "LLM: đã đồng ý" : "LLM: chưa đồng ý",
-            }),
-            el(`span.badge.${consent.has_search_consent ? "badge-ok" : "badge-warn"}`, {
-              text: consent.has_search_consent ? "Tìm kiếm: đã đồng ý" : "Tìm kiếm: chưa đồng ý",
-            }),
+            // Đọc thẳng danh sách quyền máy chủ trả về. Hai cờ `has_llm_consent` /
+            // `has_search_consent` cũ đã bị bỏ — và chúng vốn đã thiếu TTS, tức là
+            // đường dữ liệu thứ ba không hề hiện ra ở đây.
+            ...(consent.grants ?? []).length
+              ? (consent.grants ?? []).map((g) =>
+                  el("span.badge.badge-ok", {
+                    text:
+                      `${DEST_LABEL[g.destination] ?? g.destination} · ` +
+                      `${g.provider} · ` +
+                      (g.scope === "session" ? "tới khi đóng ứng dụng" : "một thao tác"),
+                  })
+                )
+              : [el("span.badge.badge-warn", { text: "chưa cho phép dịch vụ nào" })],
             el("button.btn.btn-sm.btn-danger", {
               type: "button",
               text: "Thu hồi đồng ý",
@@ -143,7 +180,12 @@ export async function render(root) {
 
     const byDest = {};
     for (const r of rows) byDest[r.destination] = (byDest[r.destination] ?? 0) + 1;
-    const blocked = rows.filter((r) => !r.consented).length;
+    // Đếm theo `status`, không theo cờ nhị phân cũ. Trường `consented` đã bị bỏ khỏi API;
+    // đọc nó ra `undefined` khiến MỌI dòng hiện "BỊ CHẶN" — nói sai theo chiều nguy hiểm
+    // nhất, vì nó bảo dữ liệu chưa đi trong khi nó đã đi rồi.
+    const attempted = rows.filter((r) => String(r.status ?? "").startsWith("attempt"));
+    const blocked = rows.filter((r) => r.status === "blocked").length;
+    const failed = rows.filter((r) => r.status === "attempt_failed").length;
     const maxChars = rows.length ? Math.max(...rows.map((r) => r.n_chars)) : 0;
 
     slot.append(
@@ -164,9 +206,13 @@ export async function render(root) {
           }),
           el("span", { text: "Xem toàn bộ hồ sơ, không chỉ hồ sơ đang chọn" })
         ),
+        // "Đã cố gửi" chứ không phải "đã gửi thành công": một lần hỏng vì timeout có thể
+        // đã gửi xong thân request rồi mới hỏng lúc đọc. Ta không chứng minh được việc
+        // giao nhận, nên không được dùng chữ đó ở bất kỳ đâu.
         stats([
-          ["Tổng số lần gửi", fmtNum(rows.length)],
-          ["Lần bị chặn", fmtNum(blocked)],
+          ["Đã cố gửi ra ngoài", fmtNum(attempted.length)],
+          ["Trong đó có phản hồi", fmtNum(attempted.length - failed)],
+          ["Bị chặn", fmtNum(blocked)],
           ["E1 · LLM", fmtNum(byDest.llm ?? 0)],
           ["E2 · Tìm kiếm", fmtNum(byDest.search ?? 0)],
           ["E3 · Lời thoại", fmtNum(byDest.tts ?? 0)],
@@ -238,10 +284,7 @@ export async function render(root) {
                   text: r.module,
                 }),
                 el("td.num", { text: fmtNum(r.n_chars) }),
-                el("td", null,
-                  r.consented
-                    ? el("span.badge.badge-ok", { text: "cho phép" })
-                    : el("span.badge.badge-flag", { text: "BỊ CHẶN" })),
+                el("td", null, statusBadge(r)),
                 el("td", {
                   style: "font-size:var(--t-xs);color:var(--ink-3)",
                   text: String(r.summary ?? "").slice(0, 110),
