@@ -458,6 +458,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "WHERE confidence = 'human_translated'"
     )
 
+    # Nhãn ⭐⭐⭐ cũ (`human`) được cấp bằng cách đo tỷ lệ TỪ VỰNG trùng nhau, ngưỡng 0.6.
+    # Đo lại trên bộ tài liệu thật: 2/8 lượt từng mang nhãn đó, và KHÔNG lượt nào xuất
+    # hiện nguyên văn trong tài liệu — cả hai đều là dương tính giả.
+    #
+    # Hạ chúng về 'ai' chứ không đổi tên sang 'verbatim_parallel': đổi tên là mang một
+    # khẳng định sai sang một cái tên mới. Chuyên gia mở lại buổi cũ trong Lịch sử phải
+    # thấy đúng mức tin cậy mà bằng chứng cho phép.
+    conn.execute("UPDATE mock_turns SET reference_tier = 'ai' WHERE reference_tier = 'human'")
+
 
 def init_db() -> list[str]:
     """Tạo toàn bộ bảng nếu chưa có. Trả về danh sách tên bảng hiện có để nghiệm thu."""

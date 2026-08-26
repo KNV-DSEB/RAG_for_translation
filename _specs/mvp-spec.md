@@ -701,6 +701,32 @@ Cho chuyên gia thấy AI đang chấm lệch bao nhiêu so với mình:
 
 ## 7. Bảo mật & quyền riêng tư (Q7)
 
+### 7.0 Rà lại A7.1–A7.7 sau đợt sửa lớp tin cậy
+
+Đối chiếu từng tiêu chí với code đang chạy, không phải với ý định.
+
+| | Trạng thái | Bằng chứng / lý do |
+|---|---|---|
+| **A7.1** hiện trước nội dung **mỗi lần gửi** | ❌ **Không còn đúng** | Đơn vị đồng ý đổi sang THAO TÁC. Thao tác một lệnh gọi (hỏi tài liệu, chấm điểm, đọc lời thoại) hiện ĐỦ nội dung, không cắt. Thao tác nhiều lệnh gọi (nghiên cứu) **không hiện được** — truy vấn do bước đầu sinh. Xem A7.1′ bên dưới |
+| **A7.2** nhật ký đủ trường, **xem và xuất được** | ⚠️ **Một nửa** | Xem được, và giàu hơn spec gốc: thêm `provider`, `status` 3 mức, `operation_id`. **Chưa có xuất CSV** |
+| **A7.3** chỉ gửi đoạn đã truy hồi | ✅ Đạt | Trần 60.000 ký tự do gateway chặn. Đo trên nhật ký thật: payload lớn nhất từng gửi **25.427** ký tự / 60 lần gửi; **0** lần vượt ngưỡng cảnh báo 40.000 |
+| **A7.4** không có API key trong mã nguồn hoặc log | ✅ Đạt | Quét mã nguồn: 0 kết quả. `_log()` chỉ ghi **tên lớp** lỗi (`type(exc).__name__`), không bao giờ ghi nội dung lỗi — vì nội dung lỗi của SDK có thể chứa key |
+| **A7.5** `git status` không có tài liệu/DB | ✅ Đạt | Kiểm trước commit `fbf3416`: 0 tệp nhạy cảm, 0 tệp >1MB |
+| **A7.6** xoá hồ sơ mất sạch dữ liệu | ✅ Đạt, tốt hơn trước | Nay dọn thêm **cache audio** của hồ sơ — trước đây không thể vì khoá cache toàn cục. Test C8 khoá lại |
+| **A7.7** truy vấn tìm kiếm **hiện cho chuyên gia sửa** trước khi gửi | ❌ **Chưa từng đạt** | Truy vấn chỉ hiện SAU khi chạy (`queries_used`). Thiết kế consent-theo-thao-tác còn làm điều này khó hơn: truy vấn sinh ra giữa thao tác, sau khi đã đồng ý |
+
+**A7.1′ (thay cho A7.1).** Với hồ sơ mật, hệ thống hỏi ý kiến trước **mỗi thao tác** có gửi
+dữ liệu ra ngoài, và cho biết **dịch vụ nào** cùng **tối đa bao nhiêu lần** — cả hai do máy
+thực thi, không phải câu chữ. Nội dung hiện **đầy đủ khi biết trước được**; khi không biết
+trước, hộp thoại phải nói thẳng thay vì hiện khung rỗng. Mọi lần gửi vào nhật ký riêng.
+
+**A7.7 để ngỏ, không âm thầm bỏ.** Muốn đạt thì phải chia `/research/run` thành nhiều bước
+có điểm dừng: lập kế hoạch → **hiện truy vấn cho sửa** → chạy tiếp. Đó chính là "workflow
+resume được" đã ước tính ~2 ngày và để ngoài phạm vi đợt này. Chưa làm thì tiêu chí này
+phải ghi là CHƯA ĐẠT, không được coi như đã đạt vì có consent ở bước trước.
+
+
+
 ### 7.1 Điểm mấu chốt: chỉ có ba đường dữ liệu ra khỏi máy
 
 Đây là lý do yêu cầu bảo mật (Q7) và yêu cầu chất lượng (Q8) **không xung đột nhiều như tưởng**. Theo tech stack trong CLAUDE.md, phần lớn xử lý đã chạy local: tạo embedding, vector DB, nhận dạng giọng nói, đọc văn bản, cơ sở dữ liệu — **tất cả trên máy**. Chỉ còn **ba đường ra**:
