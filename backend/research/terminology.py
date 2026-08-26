@@ -5,7 +5,12 @@ Output: các dòng trong bảng `glossary`, kèm thống kê thêm mới / trùn
 
 Thứ tự tin cậy (quyết định ai thắng khi xung đột bản dịch):
     1. `expert_edited`     — chuyên gia đã sửa tay, KHÔNG BAO GIỜ bị ghi đè (spec A2.13)
-    2. `human_translated`  — trích từ tài liệu SONG NGỮ SONG SONG, cặp dịch do người thật làm
+    2. `aligned_from_parallel` — trích từ tài liệu SONG NGỮ SONG SONG.
+
+       Tên cũ là `human_translated`, và nó nói quá: hai bản tài liệu đúng là do người
+       dịch, nhưng việc GHÉP thuật ngữ A ↔ thuật ngữ B là do LLM suy ra. Nhãn cũ tuyên
+       bố một mức xác nhận chưa từng xảy ra. Thứ tự ưu tiên giữ nguyên — cặp ghép từ
+       tài liệu người dịch vẫn đáng tin hơn máy suy đoán từ một ngôn ngữ.
     3. `machine_guess`     — suy đoán từ tài liệu một ngôn ngữ hoặc từ web
 
 Thuật ngữ mới vào bảng ở trạng thái `auto` và DÙNG ĐƯỢC NGAY, không có bước duyệt chặn
@@ -37,7 +42,7 @@ CATEGORIES = [
     "thành ngữ",
 ]
 
-Confidence = Literal["human_translated", "machine_guess"]
+Confidence = Literal["aligned_from_parallel", "machine_guess"]
 
 # Cắt bớt văn bản đưa vào LLM để không vượt trần payload của cửa egress.
 MAX_TEXT_CHARS = 14_000
@@ -150,7 +155,7 @@ def extract_from_parallel(
     source_ref: str,
     workspace_id: int | None,
 ) -> list[TermRecord]:
-    """Trích cặp thuật ngữ từ tài liệu song ngữ song song → độ tin `human_translated`."""
+    """Trích cặp thuật ngữ từ tài liệu song ngữ song song → độ tin `aligned_from_parallel`."""
     prompt = (
         f"CHỦ ĐỀ BUỔI LÀM VIỆC: {topic}\n\n"
         f"=== BẢN TIẾNG VIỆT ===\n{vi_text[:MAX_TEXT_CHARS // 2]}\n\n"
@@ -174,7 +179,7 @@ def extract_from_parallel(
             pronunciation=t.pronunciation.strip(),
             definition=t.definition.strip(),
             category=t.category.strip(),
-            confidence="human_translated",
+            confidence="aligned_from_parallel",
             source_type="document",
             source_ref=source_ref,
         )
@@ -277,7 +282,7 @@ def extract_from_web(
 
 # ============================== Ghi vào bảng glossary ==============================
 
-_RANK = {"expert_edited": 3, "human_translated": 2, "machine_guess": 1}
+_RANK = {"expert_edited": 3, "aligned_from_parallel": 2, "machine_guess": 1}
 
 
 def _rank_of(status: str, confidence: str) -> int:

@@ -18,7 +18,9 @@ import {
 } from "../ui.js";
 
 const CONFIDENCE = {
-  human_translated: ["badge-ok", "⭐⭐⭐ người dịch"],
+  // Hai bản tài liệu do người dịch, nhưng việc GHÉP thuật ngữ A ↔ B là do LLM suy ra.
+  // Nhãn cũ ("người dịch") tuyên bố một mức xác nhận chưa từng xảy ra.
+  aligned_from_parallel: ["badge-ok", "⭐⭐⭐ ghép từ tài liệu song ngữ"],
   machine_guess: ["badge-mute", "máy suy đoán"],
 };
 
@@ -300,7 +302,7 @@ export async function render(root) {
     slot.append(
       stats([
         ["Tổng thuật ngữ", fmtNum(statsData.total)],
-        ["⭐⭐⭐ người dịch", fmtNum(statsData.human_translated)],
+        ["⭐⭐⭐ ghép từ tài liệu song ngữ", fmtNum(statsData.aligned_from_parallel)],
         ["Bạn đã sửa", fmtNum(statsData.expert_edited)],
         ["Có cách đọc", fmtNum(statsData.with_pronunciation)],
       ])

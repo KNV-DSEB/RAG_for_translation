@@ -46,22 +46,34 @@ class WorkspaceOut(BaseModel):
 
 
 class ConsentGrant(BaseModel):
-    workspace_id: int
-    scope: Literal["session", "once"] = "session"
-    destination: Literal["llm", "search"] | None = None
+    """Giao diện chỉ gửi lại mã yêu cầu do máy chủ phát ra, và phạm vi muốn cấp.
+
+    CỐ Ý không có `destination`/`provider`/`payload_hash`: chúng đọc từ bản ghi
+    `pending_consents` của chính máy chủ. Để giao diện tự khai những trường đó nghĩa là
+    tin nó rằng "đây đúng là thứ người dùng vừa xem" — sai hình dạng cho một quyết định
+    bảo mật, kể cả khi mối lo chỉ là bug của chính giao diện.
+    """
+
+    consent_request_id: str
+    scope: Literal["operation", "session"] = "operation"
 
 
 class EgressPreviewOut(BaseModel):
-    """Trả về kèm HTTP 409 khi hồ sơ mật chưa có vé đồng ý."""
+    """Trả về kèm HTTP 409 khi hồ sơ mật chưa cho phép thao tác này."""
 
+    consent_request_id: str
+    operation_id: str
     workspace_id: int
     workspace_name: str
-    module: str
-    destination: str
-    endpoint: str
-    n_chars: int
-    summary: str
+    operation_kind: str
+    declares: list[dict[str, object]]
+    scope_note: str
     payload_excerpt: str
+    # False = thao tác nhiều lệnh gọi, nội dung do các bước bên trong sinh ra nên chưa
+    # biết trước. Hộp thoại PHẢI nói rõ điều đó thay vì hiện một khối rỗng.
+    payload_known: bool
+    payload_truncated: bool
+    n_chars: int
 
 
 class EgressLogOut(BaseModel):
@@ -69,10 +81,16 @@ class EgressLogOut(BaseModel):
     workspace_id: int | None = None
     module: str
     destination: str
+    provider: str = ""
+    provider_label: str = ""
     endpoint: str | None = None
     n_chars: int
     summary: str | None = None
-    consented: bool
+    # 'blocked' — chưa chạm mạng. 'attempt_succeeded' — nhà cung cấp trả lời bình thường.
+    # 'attempt_failed' — đã cố gửi rồi hỏng; KHÔNG kết luận được dữ liệu đã đi hay chưa.
+    status: str = "attempt_succeeded"
+    error_class: str | None = None
+    operation_id: str | None = None
     created_at: str
 
 

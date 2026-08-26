@@ -1,34 +1,45 @@
 """Đọc văn bản thành giọng nói (TTS): edge-tts chính, gTTS fallback.
 
 Input:  văn bản + ngôn ngữ + tốc độ đọc (+ workspace_id để tra cách đọc tên riêng).
-Output: đường dẫn tệp MP3 trong `data/tts_cache/`.
+Output: đường dẫn tệp MP3 trong `data/tts_cache/<workspace_id>/`.
 
-Ba điểm thiết kế:
+Bốn điểm thiết kế:
 
-1. CACHE THEO NỘI DUNG. Khoá cache là hash của (văn bản đã xử lý + giọng + tốc độ). Nghe lại
-   cùng một lượt thì lấy tệp cũ, không gọi mạng lại, không phải chờ (spec A4.7).
+1. CACHE THEO NỘI DUNG, CHIA THEO HỒ SƠ. Khoá cache là hash của (văn bản đã xử lý + giọng
+   + tốc độ), nằm trong thư mục con của hồ sơ. Nghe lại cùng một lượt thì lấy tệp cũ,
+   không gọi mạng lại, không phải chờ (spec A4.7).
+
+   Chia theo hồ sơ vì khoá toàn cục gây hai lỗi cùng lúc: xoá hồ sơ không dọn được audio
+   của nó — trong khi `workspaces.py` hứa "xoá vĩnh viễn toàn bộ dữ liệu liên quan" — và
+   một hồ sơ MẬT có thể nhận tệp đã sinh dưới hồ sơ thường mà không qua hộp thoại nào,
+   vì lần lấy từ cache không đi qua gateway.
 
 2. DÙNG CỘT `pronunciation` CỦA GLOSSARY. Giọng tiếng Việt đọc "Latter-Day Saint Charities"
    sẽ sai bét. Trước khi đọc, hệ thống thay tên riêng bằng gợi ý cách đọc mà chuyên gia đã
    ghi trong bảng thuật ngữ (quyết định Q6) — đây là lý do cột đó tồn tại.
 
-3. HỎNG THÌ VẪN CHẠY TIẾP. edge-tts dùng API không chính thức nên có thể hỏng; khi đó tự
-   chuyển sang gTTS. Hỏng cả hai thì ném lỗi để giao diện hiện lời thoại dạng chữ, buổi mock
-   không bị chặn (spec edge case §4.2).
+3. HAI NHÀ CUNG CẤP = HAI LẦN EGRESS RIÊNG. edge-tts gửi văn bản tới **Microsoft**, gTTS
+   gửi tới **Google**. Bọc chung một lần ghi nhật ký thì khi edge hỏng, dữ liệu đi sang
+   Google mà nhật ký vẫn ghi tên giọng của Microsoft — nhật ký nói sai đích đến.
+   Cả hai đều được khai trước trong `declares` của thao tác, nên chuyên gia biết ngay từ
+   hộp thoại đầu tiên rằng có khả năng fallback, và không bị hỏi lại giữa chừng.
+
+4. HỎNG THÌ VẪN CHẠY TIẾP. Hỏng cả hai thì ném lỗi để giao diện hiện lời thoại dạng chữ,
+   buổi mock không bị chặn (spec edge case §4.2).
 """
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from backend.config import settings
 from backend.db import get_conn
-from backend.security import egress
+from backend.security import gateway
 
 Language = Literal["vi", "en"]
 Speed = Literal["slow", "normal", "fast"]
@@ -39,6 +50,12 @@ _EDGE_RATE = {"slow": "-20%", "normal": "+0%", "fast": "+20%"}
 _GTTS_SLOW = {"slow": True, "normal": False, "fast": False}
 
 MAX_TTS_CHARS = 4000
+
+# Khai báo dùng chung cho mọi thao tác đọc lời thoại: đúng một lần mỗi nhà cung cấp.
+TTS_DECLARES = (
+    gateway.OperationDeclaration("tts", gateway.PROVIDER_EDGE, unit_calls=1),
+    gateway.OperationDeclaration("tts", gateway.PROVIDER_GTTS, unit_calls=1),
+)
 
 
 class TtsError(RuntimeError):
@@ -55,9 +72,25 @@ class TtsResult:
     substitutions: list[tuple[str, str]]
 
 
-def _cache_key(text: str, voice: str, speed: str) -> str:
+def _cache_dir(workspace_id: int | None) -> Path:
+    """Thư mục cache của một hồ sơ. `None` → thư mục dùng chung cho việc không thuộc hồ sơ nào."""
+    name = str(workspace_id) if workspace_id is not None else "_chung"
+    return settings.tts_cache_dir / name
+
+
+def _cache_path(text: str, voice: str, speed: str, workspace_id: int | None) -> Path:
     digest = hashlib.sha256(f"{voice}|{speed}|{text}".encode("utf-8")).hexdigest()
-    return digest[:32]
+    return _cache_dir(workspace_id) / f"{digest[:32]}.mp3"
+
+
+def delete_workspace_cache(workspace_id: int) -> int:
+    """Xoá toàn bộ audio đã sinh cho một hồ sơ. Trả về số tệp đã xoá."""
+    folder = _cache_dir(workspace_id)
+    if not folder.exists():
+        return 0
+    n = len(list(folder.glob("*.mp3")))
+    shutil.rmtree(folder, ignore_errors=True)
+    return n
 
 
 def pronunciation_map(workspace_id: int) -> dict[str, str]:
@@ -102,48 +135,15 @@ def apply_pronunciation(
     result = text
     # Thay cụm dài trước để "Latter-Day Saint Charities" không bị "Charities" cắt trước.
     for surface in sorted(mapping, key=len, reverse=True):
-        pattern = re.compile(re.escape(surface), re.IGNORECASE)
+        # Chặn hai đầu bằng ranh giới từ. Không có nó, một thuật ngữ ngắn như "ODA" sẽ bị
+        # thay ngay bên trong một từ khác và câu đọc lên thành vô nghĩa.
+        # `(?<!\w)` / `(?!\w)` thay vì `\b` vì thuật ngữ có thể bắt đầu hoặc kết thúc bằng
+        # ký tự không phải chữ (ví dụ "Latter-Day", "(LDSC)").
+        pattern = re.compile(rf"(?<!\w){re.escape(surface)}(?!\w)", re.IGNORECASE)
         if pattern.search(result):
             result = pattern.sub(mapping[surface], result)
             applied.append((surface, mapping[surface]))
     return result, applied
-
-
-# ============================== edge-tts (chính) ==============================
-
-
-async def _edge_save(text: str, voice: str, rate: str, out_path: Path) -> None:
-    import edge_tts
-
-    communicate = edge_tts.Communicate(text, voice, rate=rate)
-    await communicate.save(str(out_path))
-
-
-def _synthesize_edge(text: str, voice: str, speed: Speed, out_path: Path) -> None:
-    try:
-        asyncio.run(_edge_save(text, voice, _EDGE_RATE[speed], out_path))
-    except RuntimeError:
-        # Đã có event loop đang chạy (ví dụ gọi từ trong async context)
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(_edge_save(text, voice, _EDGE_RATE[speed], out_path))
-        finally:
-            loop.close()
-
-    if not out_path.exists() or out_path.stat().st_size < 1024:
-        raise TtsError("edge-tts trả về tệp rỗng.")
-
-
-# ============================== gTTS (fallback) ==============================
-
-
-def _synthesize_gtts(text: str, lang: Language, speed: Speed, out_path: Path) -> None:
-    from gtts import gTTS
-
-    engine = gTTS(text=text, lang=lang, slow=_GTTS_SLOW[speed])
-    engine.save(str(out_path))
-    if not out_path.exists() or out_path.stat().st_size < 512:
-        raise TtsError("gTTS trả về tệp rỗng.")
 
 
 # ============================== Điểm vào ==============================
@@ -157,7 +157,10 @@ def synthesize(
     speed: Speed = "normal",
     voice: str | None = None,
 ) -> TtsResult:
-    """Đọc văn bản thành tệp MP3, có cache. Ném `TtsError` nếu cả hai engine đều hỏng."""
+    """Đọc văn bản thành tệp MP3, có cache. Ném `TtsError` nếu cả hai engine đều hỏng.
+
+    PHẢI được gọi bên trong `gateway.operation(..., declares=TTS_DECLARES)`.
+    """
     clean = text.strip()
     if not clean:
         raise TtsError("Không có nội dung để đọc.")
@@ -170,8 +173,8 @@ def synthesize(
     )
 
     settings.ensure_dirs()
-    key = _cache_key(spoken, chosen_voice, speed)
-    out_path = settings.tts_cache_dir / f"{key}.mp3"
+    out_path = _cache_path(spoken, chosen_voice, speed, workspace_id)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Cache hit: KHÔNG có lệnh gọi mạng nào, nên không tính là dữ liệu rời khỏi máy.
     if out_path.exists() and out_path.stat().st_size > 512:
@@ -180,42 +183,57 @@ def synthesize(
             text_spoken=spoken, substitutions=substitutions,
         )
 
-    # Từ đây trở xuống là gọi mạng thật: edge-tts gửi văn bản tới Microsoft, gTTS tới Google.
-    # Lời thoại chứa tên khách hàng và số liệu dự án nên PHẢI đi qua cửa egress (E3),
-    # để hồ sơ mật được hỏi ý kiến trước và mọi lần gửi đều vào nhật ký.
-    request = egress.EgressRequest(
-        module="speech.tts",
-        destination="tts",
-        payload_text=spoken,
-        summary=f"Đọc lời thoại ({lang}, giọng {chosen_voice}): {spoken[:100]}",
-        workspace_id=workspace_id,
-        endpoint=f"tts:{chosen_voice}",
-    )
-
+    # Từ đây trở xuống là gọi mạng thật. Lời thoại chứa tên khách hàng và số liệu dự án,
+    # nên mỗi nhà cung cấp là một lần đi qua gateway riêng, có dòng nhật ký riêng.
     errors: list[str] = []
 
-    with egress.egress(request):
-        # --- edge-tts: giọng neural, tiếng Việt tự nhiên ---
-        try:
-            _synthesize_edge(spoken, chosen_voice, speed, out_path)
-            return TtsResult(
-                path=out_path, engine="edge-tts", voice=chosen_voice, cached=False,
-                text_spoken=spoken, substitutions=substitutions,
-            )
-        except Exception as exc:
-            errors.append(f"edge-tts: {type(exc).__name__}")
-            out_path.unlink(missing_ok=True)
+    # --- edge-tts (Microsoft): giọng neural, tiếng Việt tự nhiên ---
+    try:
+        gateway.execute(
+            gateway.EgressRequest(
+                module="speech.tts",
+                destination="tts",
+                provider=gateway.PROVIDER_EDGE,
+                payload_text=spoken,
+                summary=f"Đọc lời thoại ({lang}, giọng {chosen_voice}): {spoken[:100]}",
+                workspace_id=workspace_id,
+                endpoint=f"edge-tts:{chosen_voice}",
+            ),
+            text=spoken, voice=chosen_voice, rate=_EDGE_RATE[speed], out_path=out_path,
+        )
+        return TtsResult(
+            path=out_path, engine="edge-tts", voice=chosen_voice, cached=False,
+            text_spoken=spoken, substitutions=substitutions,
+        )
+    except (gateway.ConsentRequired, gateway.PayloadTooLarge, gateway.NoActiveOperation):
+        raise
+    except Exception as exc:
+        errors.append(f"edge-tts: {type(exc).__name__}")
+        out_path.unlink(missing_ok=True)
 
-        # --- gTTS: nhẹ, ổn định, giọng máy móc hơn ---
-        try:
-            _synthesize_gtts(spoken, lang, speed, out_path)
-            return TtsResult(
-                path=out_path, engine="gTTS", voice=f"gtts-{lang}", cached=False,
-                text_spoken=spoken, substitutions=substitutions,
-            )
-        except Exception as exc:
-            errors.append(f"gTTS: {type(exc).__name__}")
-            out_path.unlink(missing_ok=True)
+    # --- gTTS (Google): nhẹ, ổn định, giọng máy móc hơn ---
+    try:
+        gateway.execute(
+            gateway.EgressRequest(
+                module="speech.tts",
+                destination="tts",
+                provider=gateway.PROVIDER_GTTS,
+                payload_text=spoken,
+                summary=f"Đọc lời thoại dự phòng ({lang}): {spoken[:100]}",
+                workspace_id=workspace_id,
+                endpoint=f"gtts:{lang}",
+            ),
+            text=spoken, lang=lang, slow=_GTTS_SLOW[speed], out_path=out_path,
+        )
+        return TtsResult(
+            path=out_path, engine="gTTS", voice=f"gtts-{lang}", cached=False,
+            text_spoken=spoken, substitutions=substitutions,
+        )
+    except (gateway.ConsentRequired, gateway.PayloadTooLarge, gateway.NoActiveOperation):
+        raise
+    except Exception as exc:
+        errors.append(f"gTTS: {type(exc).__name__}")
+        out_path.unlink(missing_ok=True)
 
     raise TtsError(
         "Không đọc được lời thoại bằng cả edge-tts và gTTS ("
@@ -232,7 +250,7 @@ def would_egress(text: str, lang: Language, workspace_id: int | None = None,
     """
     spoken, _ = apply_pronunciation(text.strip(), workspace_id, lang)
     chosen = voice or (settings.tts_voice_vi if lang == "vi" else settings.tts_voice_en)
-    path = settings.tts_cache_dir / f"{_cache_key(spoken, chosen, speed)}.mp3"
+    path = _cache_path(spoken, chosen, speed, workspace_id)
     return not (path.exists() and path.stat().st_size > 512)
 
 
@@ -241,10 +259,13 @@ def voice_for(lang: Language, character: str = "A") -> str:
     return settings.tts_voice_vi if lang == "vi" else settings.tts_voice_en
 
 
-def cache_stats() -> dict[str, object]:
+def cache_stats(workspace_id: int | None = None) -> dict[str, object]:
     """Dung lượng cache audio, cho trang quản lý dung lượng."""
     settings.ensure_dirs()
-    files = list(settings.tts_cache_dir.glob("*.mp3"))
+    if workspace_id is None:
+        files = list(settings.tts_cache_dir.rglob("*.mp3"))
+    else:
+        files = list(_cache_dir(workspace_id).glob("*.mp3"))
     total = sum(f.stat().st_size for f in files)
     return {
         "n_files": len(files),
@@ -253,10 +274,12 @@ def cache_stats() -> dict[str, object]:
     }
 
 
-def clear_cache() -> int:
-    """Xoá toàn bộ cache audio. Trả về số tệp đã xoá."""
+def clear_cache(workspace_id: int | None = None) -> int:
+    """Xoá cache audio. Không nêu hồ sơ thì xoá tất cả. Trả về số tệp đã xoá."""
     settings.ensure_dirs()
-    files = list(settings.tts_cache_dir.glob("*.mp3"))
+    if workspace_id is not None:
+        return delete_workspace_cache(workspace_id)
+    files = list(settings.tts_cache_dir.rglob("*.mp3"))
     for path in files:
         path.unlink(missing_ok=True)
     return len(files)

@@ -137,7 +137,10 @@ def build_scoring_prompt(
 ) -> str:
     lang_label = {"vi": "tiếng Việt", "en": "tiếng Anh"}
     tier_label = {
-        "human": "bản dịch của NGƯỜI THẬT lấy từ tài liệu của buổi làm việc (đáng tin nhất)",
+        "verbatim_parallel": (
+            "câu tìm được NGUYÊN VĂN trong tài liệu song ngữ của buổi làm việc "
+            "(do người dịch, đáng tin hơn bản AI sinh)"
+        ),
         "expert_pinned": "bản dịch do chính chuyên gia này chốt trước đó",
         "ai": "bản dịch do AI sinh (chỉ để tham khảo, không phải chuẩn tuyệt đối)",
     }

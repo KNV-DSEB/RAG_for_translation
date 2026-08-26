@@ -129,7 +129,10 @@ _SCHEMA: tuple[str, ...] = (
         profile_id       INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
         field_key        TEXT    NOT NULL,
         value            TEXT,
-        is_verified      INTEGER NOT NULL DEFAULT 0,  -- 0 = chưa xác minh, phải đánh dấu rõ
+        -- CÓ NGUỒN, không phải ĐÃ XÁC MINH: chỉ nghĩa là mô hình gắn cho trường này một
+        -- URL thật sự có trong kết quả tìm kiếm. Không ai kiểm nguồn đó có chứng minh
+        -- được câu khẳng định hay không. Đặt tên đúng để đừng ai tin quá mức.
+        has_source       INTEGER NOT NULL DEFAULT 0,
         is_expert_edited INTEGER NOT NULL DEFAULT 0,  -- sửa tay thì lần research sau không ghi đè
         created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
     )
@@ -159,7 +162,7 @@ _SCHEMA: tuple[str, ...] = (
         pronunciation  TEXT,   -- cách đọc tên riêng/viết tắt (Q6), dùng cho cả TTS
         definition     TEXT,
         category       TEXT,
-        -- 'human_translated' (từ tài liệu song ngữ) | 'machine_guess'
+        -- 'aligned_from_parallel' (LLM ghép cặp từ tài liệu song ngữ) | 'machine_guess'
         confidence     TEXT    NOT NULL DEFAULT 'machine_guess',
         -- 'auto' (tự nhận, dùng được ngay - Q9) | 'expert_edited' | 'skipped'
         status         TEXT    NOT NULL DEFAULT 'auto',
@@ -292,15 +295,60 @@ _SCHEMA: tuple[str, ...] = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_egress_ws ON egress_log(workspace_id, created_at)",
     """
-    -- Vé đồng ý cho hồ sơ mật. Mặc định phạm vi 'session' để không hỏi lại liên tục (câu mở O3).
-    CREATE TABLE IF NOT EXISTS consent_tickets (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        workspace_id  INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-        scope         TEXT    NOT NULL DEFAULT 'session',  -- 'session' | 'once'
-        destination   TEXT,   -- NULL = áp dụng cho mọi đích
-        granted_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-        expires_at    TEXT,
-        used          INTEGER NOT NULL DEFAULT 0
+    -- DANH TÍNH của một lần thao tác người dùng bấm (ví dụ "chạy nghiên cứu lần này").
+    -- Tách khỏi consent_grants: một thao tác có thể chạy nhờ quyền cấp riêng cho nó,
+    -- HOẶC nhờ quyền cấp cho cả phiên. Gộp hai thứ vào một bảng thì vé phiên
+    -- (operation_id = NULL) làm việc resume trượt, và nút "cho tới khi đóng ứng dụng"
+    -- thành vô dụng.
+    CREATE TABLE IF NOT EXISTS operations (
+        id                   TEXT    PRIMARY KEY,          -- uuid4 do máy chủ đúc
+        workspace_id         INTEGER REFERENCES workspaces(id) ON DELETE CASCADE,
+        operation_kind       TEXT    NOT NULL,             -- 'research.run' | 'tts.speak' | ...
+        request_fingerprint  TEXT    NOT NULL,             -- method+route+body+query
+        declares             TEXT    NOT NULL,             -- JSON [{destination,provider,max_calls}]
+        created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
+        expires_at           TEXT    NOT NULL,
+        completed_at         TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_operations_ws ON operations(workspace_id, created_at)",
+    """
+    -- Ngân sách số lệnh gọi của từng thao tác. Có bảng này thì câu "tối đa 8 truy vấn"
+    -- là luật máy thực thi, không phải câu chữ trên giao diện.
+    CREATE TABLE IF NOT EXISTS operation_calls (
+        operation_id  TEXT    NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+        destination   TEXT    NOT NULL,
+        provider      TEXT    NOT NULL,
+        allowed_calls INTEGER NOT NULL,
+        used_calls    INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (operation_id, destination, provider)
+    )
+    """,
+    """
+    -- QUYỀN. Thay cho consent_tickets cũ (vé destination=NULL khớp mọi đích, 8 giờ).
+    -- operation_id NULL = quyền cho cả phiên, không gắn thao tác nào.
+    CREATE TABLE IF NOT EXISTS consent_grants (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id    INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        operation_id    TEXT    REFERENCES operations(id) ON DELETE CASCADE,
+        scope           TEXT    NOT NULL,   -- 'operation' | 'session'
+        destination     TEXT    NOT NULL,   -- KHÔNG còn NULL: phải nêu đích danh
+        provider        TEXT    NOT NULL,
+        granted_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+        expires_at      TEXT    NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_grants_lookup ON consent_grants(workspace_id, destination, provider)",
+    """
+    -- Challenge do máy chủ giữ. Giao diện chỉ gửi lại `id` + `scope` khi đồng ý, nên nó
+    -- không thể đổi provider/thao tác giữa lúc xem trước và lúc bấm đồng ý.
+    CREATE TABLE IF NOT EXISTS pending_consents (
+        id             TEXT    PRIMARY KEY,   -- uuid4
+        operation_id   TEXT    NOT NULL REFERENCES operations(id) ON DELETE CASCADE,
+        workspace_id   INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+        expires_at     TEXT    NOT NULL,
+        used           INTEGER NOT NULL DEFAULT 0
     )
     """,
 )
@@ -334,6 +382,20 @@ def get_conn() -> Iterator[sqlite3.Connection]:
 # cơ sở dữ liệu cũ, nên cần bổ sung tay ở đây.
 _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("profile_sources", "reachable", "TEXT NOT NULL DEFAULT 'unchecked'"),
+    # Nhật ký egress: ghi ĐÚNG nhà cung cấp và ĐÚNG chuyện đã xảy ra.
+    # Cột `consented` (bool) cũ nói dối theo hai chiều: nó gọi cả lần DNS hỏng là
+    # "đã rời máy", mà cũng không phân biệt được "bị chặn" với "đã cố gửi rồi hỏng".
+    ("egress_log", "provider", "TEXT NOT NULL DEFAULT ''"),
+    ("egress_log", "operation_id", "TEXT"),
+    ("egress_log", "status", "TEXT NOT NULL DEFAULT 'attempt_succeeded'"),
+    ("egress_log", "error_class", "TEXT"),
+)
+
+# Đổi tên cột cho khớp thứ CODE chứng minh được, không phải thứ ta mong nó là.
+# `is_verified` chỉ có nghĩa "có URL trong kết quả tìm kiếm" — không ai kiểm nguồn đó
+# có thật sự chứng minh câu khẳng định hay không. Xem plan §A6.
+_RENAMED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("profile_fields", "is_verified", "has_source"),
 )
 
 
@@ -352,12 +414,59 @@ def _ensure_columns(conn: sqlite3.Connection) -> list[str]:
     return added
 
 
+def _rename_columns(conn: sqlite3.Connection) -> list[str]:
+    """Đổi tên cột trên cơ sở dữ liệu đã có. Chạy lại nhiều lần vẫn an toàn."""
+    renamed: list[str] = []
+    for table, old, new in _RENAMED_COLUMNS:
+        existing = {
+            str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if not existing or new in existing or old not in existing:
+            continue
+        conn.execute(f"ALTER TABLE {table} RENAME COLUMN {old} TO {new}")
+        renamed.append(f"{table}.{old}→{new}")
+    return renamed
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Dọn tàn dư của mô hình consent cũ. Idempotent."""
+    # Vé cũ: `destination` NULL khớp MỌI đích trong 8 giờ — đồng ý gửi cho LLM là mở luôn
+    # tìm kiếm và đọc lời thoại. Không migrate sang mô hình mới: vé đồng ý vốn phù du,
+    # và giữ lại thì mang theo đúng cái ngữ nghĩa đang phải bỏ.
+    conn.execute("DROP TABLE IF EXISTS consent_tickets")
+
+    # "Cho tới khi đóng ứng dụng" phải đúng nghĩa đen. Quyền phiên nằm trong SQLite nên
+    # nó sống qua cả lần tắt máy — xoá lúc khởi động thì cái nhãn mới thành sự thật.
+    conn.execute("DELETE FROM consent_grants WHERE scope = 'session'")
+
+    # Thao tác dở dang và challenge quá hạn không có lý do gì tồn tại qua lần chạy sau.
+    conn.execute("DELETE FROM pending_consents WHERE used = 1 OR expires_at <= datetime('now')")
+    conn.execute("DELETE FROM operations WHERE completed_at IS NULL AND expires_at <= datetime('now')")
+
+    # Nhật ký cũ chỉ có `consented`: 1 = đã gửi, 0 = bị chặn. Dịch sang ba trạng thái mới
+    # ở mức chắc chắn nhất còn suy ra được — không bịa thêm điều bản ghi cũ không nói.
+    conn.execute(
+        "UPDATE egress_log SET status = CASE WHEN consented = 1 "
+        "THEN 'attempt_succeeded' ELSE 'blocked' END WHERE status IS NULL OR status = ''"
+    )
+
+    # `human_translated` nói quá: hai bản tài liệu do người dịch, nhưng việc GHÉP thuật
+    # ngữ A ↔ B là do LLM. Đổi tên chứ không đổi thứ tự ưu tiên — cặp ghép từ tài liệu
+    # người dịch vẫn đáng tin hơn máy suy đoán từ một ngôn ngữ.
+    conn.execute(
+        "UPDATE glossary SET confidence = 'aligned_from_parallel' "
+        "WHERE confidence = 'human_translated'"
+    )
+
+
 def init_db() -> list[str]:
     """Tạo toàn bộ bảng nếu chưa có. Trả về danh sách tên bảng hiện có để nghiệm thu."""
     with get_conn() as conn:
         for statement in _SCHEMA:
             conn.execute(statement)
         _ensure_columns(conn)
+        _rename_columns(conn)
+        _migrate(conn)
         rows = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         ).fetchall()

@@ -208,46 +208,81 @@ export function confirmDanger({ title, body, confirmLabel = "Xác nhận", detai
 }
 
 /**
- * Cổng đồng ý cho hồ sơ mật — hiện NGUYÊN VĂN nội dung sắp gửi ra ngoài.
- * Cắm vào api.js qua setConsentHandler.
+ * Cổng đồng ý cho hồ sơ mật. Cắm vào api.js qua setConsentHandler.
+ *
+ * Ba điều hộp thoại này phải nói đúng, vì chuyên gia sẽ tin vào nó:
+ *
+ * 1. Nội dung hiện ra là TOÀN BỘ nội dung sắp gửi, không phải trích đoạn. Bản cũ cắt
+ *    4.000 ký tự rồi vẫn ghi "đây là chính xác nội dung" — nói dối đúng chỗ nguy hiểm nhất.
+ * 2. Thao tác gồm nhiều lần gửi thì nội dung CHƯA biết trước được (truy vấn tìm kiếm do
+ *    bước đầu sinh ra). Khi đó phải nói thẳng, không hiện một khối rỗng cho có.
+ * 3. Phạm vi và giới hạn số lần lấy nguyên văn từ máy chủ (`scope_note`), sinh ra từ
+ *    chính chính sách đang được thực thi — nên câu chữ không thể lệch khỏi luật.
+ *
+ * Trả về: null nếu từ chối, hoặc "operation" | "session" là phạm vi được chọn.
  */
 export function consentDialog(preview) {
-  const destLabel =
-    { llm: "gọi mô hình ngôn ngữ", search: "truy vấn tìm kiếm web", tts: "đọc lời thoại thành giọng nói" }[
-      preview.destination
-    ] ?? preview.destination;
+  const declares = preview.declares ?? [];
 
   return openModal((box, done) => {
+    const payloadBlock = preview.payload_known
+      ? [
+          el("p", null,
+            "Toàn bộ nội dung sẽ rời khỏi máy này — ",
+            el("b", { text: `${fmtNum(preview.n_chars)} ký tự` }),
+            ":"),
+          el("pre.payload", { text: preview.payload_excerpt ?? "" }),
+        ]
+      : [
+          note(
+            "warn",
+            "Thao tác này gửi ra ngoài nhiều lần, và nội dung từng lần do các bước bên " +
+              "trong sinh ra nên chưa hiện trước được. Mọi lần gửi đều được ghi lại đầy " +
+              "đủ trong màn Bảo mật để bạn soi lại sau."
+          ),
+        ];
+
     box.append(
       el("h2", { text: "Cần bạn đồng ý trước khi gửi dữ liệu ra ngoài" }),
-      note(
-        "secret",
-        `Hồ sơ “${preview.workspace_name}” đang ở chế độ mật. ` +
-          `Thao tác này sẽ ${destLabel}.`
-      ),
+      note("secret", `Hồ sơ “${preview.workspace_name}” đang ở chế độ mật.`),
       el(
         "div.modal-body",
         null,
+        el("p.scope-note", { text: preview.scope_note ?? "" }),
         el(
-          "p",
+          "ul.declares",
           null,
-          "Sẽ gửi ",
-          el("b", { text: `${preview.n_chars} ký tự` }),
-          " tới ",
-          el("code", { text: preview.endpoint || preview.destination }),
-          ` — từ mô-đun ${preview.module}.`
+          declares.map((d) =>
+            el("li", null,
+              el("b", { text: d.provider_label }),
+              ` — ${d.destination_label}, tối đa `,
+              el("span.mono", { text: String(d.unit_calls) }),
+              " lần"
+            )
+          )
         ),
-        el("p", { text: "Đây là chính xác nội dung sẽ rời khỏi máy này:" }),
-        el("pre.payload", { text: preview.payload_excerpt ?? "" })
+        ...payloadBlock
       ),
       el(
         "div.modal-foot",
         null,
-        el("button.btn", { type: "button", text: "Không gửi", onclick: () => done(false) }),
+        el("button.btn", {
+          type: "button",
+          text: "Không gửi",
+          onclick: () => done(null),
+        }),
+        el("button.btn.btn-ghost", {
+          type: "button",
+          text: "Cho tới khi đóng ứng dụng",
+          title:
+            "Chỉ áp dụng cho đúng những dịch vụ liệt kê ở trên, và hết hiệu lực khi bạn " +
+            "đóng ứng dụng.",
+          onclick: () => done("session"),
+        }),
         el("button.btn.btn-primary", {
           type: "button",
-          text: "Đồng ý cho cả buổi làm việc",
-          onclick: () => done(true),
+          text: "Chỉ thao tác này",
+          onclick: () => done("operation"),
         })
       )
     );

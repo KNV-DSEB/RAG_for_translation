@@ -8,6 +8,8 @@ Hai ràng buộc nghiệp vụ:
       không tin vào việc gọi hàm cho đúng.
     - Truy vấn CÓ CHỨA tên khách hàng, nên phải đi qua cửa egress để hồ sơ mật được
       hỏi ý kiến trước và mọi truy vấn đều vào nhật ký.
+      Mỗi lần THỬ LẠI là một lệnh gọi mạng riêng, nên nó cũng là một dòng nhật ký riêng
+      và trừ một lượt trong ngân sách `max_calls` của thao tác.
 
 Bị chặn hoặc mất mạng thì trả về KẾT QUẢ MỘT PHẦN kèm ghi chú, không làm hỏng cả lần chạy.
 """
@@ -18,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 
 from backend.config import settings
-from backend.security import egress
+from backend.security import gateway
 
 # Đoạn trích dài hơn mức này bị cắt — nhiều kết quả nhân lên sẽ vượt trần payload egress.
 MAX_SNIPPET_CHARS = 500
@@ -87,41 +89,39 @@ def search_web(
 
     limit = max_results or settings.search_results_per_query
 
-    request = egress.EgressRequest(
-        module=module,
-        destination="search",
-        payload_text=query,
-        summary=f"Truy vấn tìm kiếm: {query[:120]}",
-        workspace_id=workspace_id,
-        endpoint="duckduckgo",
-    )
+    # Hạn mức truy vấn trừ TRƯỚC lần gọi đầu, nhưng SAU khi gateway đã cho qua: bị chặn
+    # vì chưa đồng ý thì không được trừ hạn mức của chuyên gia.
+    last_error: Exception | None = None
+    raw = None
+    for attempt in range(SEARCH_RETRIES + 1):
+        request = gateway.EgressRequest(
+            module=module,
+            destination="search",
+            provider="ddgs",
+            payload_text=query,
+            summary=f"Truy vấn tìm kiếm: {query[:120]}",
+            workspace_id=workspace_id,
+            endpoint="duckduckgo",
+        )
+        try:
+            if attempt == 0:
+                budget.consume(query)
+            raw = gateway.execute(request, query=query, max_results=limit, region="wt-wt")
+            break
+        except (gateway.ConsentRequired, gateway.PayloadTooLarge,
+                gateway.OperationBudgetExceeded, SearchBudgetExceeded):
+            raise
+        except Exception as exc:
+            last_error = exc
+            if attempt < SEARCH_RETRIES:
+                time.sleep(1.5 * (attempt + 1))  # giảm tốc rồi thử lại
 
-    # Cửa egress chạy TRƯỚC khi tính vào hạn mức: bị chặn vì chưa đồng ý thì
-    # không được trừ hạn mức của chuyên gia.
-    with egress.egress(request):
-        budget.consume(query)
-
-        from ddgs import DDGS
-
-        last_error: Exception | None = None
-        for attempt in range(SEARCH_RETRIES + 1):
-            try:
-                with DDGS() as client:
-                    raw = client.text(query, max_results=limit, region="wt-wt")
-                break
-            except Exception as exc:
-                last_error = exc
-                if attempt < SEARCH_RETRIES:
-                    time.sleep(1.5 * (attempt + 1))  # giảm tốc rồi thử lại
-        else:
-            raw = None
-
-        if raw is None:
-            raise SearchUnavailable(
-                "Không tìm kiếm được trên web — có thể mất mạng hoặc công cụ tìm kiếm "
-                f"đang giới hạn tần suất ({type(last_error).__name__}). "
-                "Kết quả đã thu được vẫn giữ nguyên."
-            )
+    if raw is None:
+        raise SearchUnavailable(
+            "Không tìm kiếm được trên web — có thể mất mạng hoặc công cụ tìm kiếm "
+            f"đang giới hạn tần suất ({type(last_error).__name__}). "
+            "Kết quả đã thu được vẫn giữ nguyên."
+        )
 
     results: list[SearchResult] = []
     for item in raw or []:

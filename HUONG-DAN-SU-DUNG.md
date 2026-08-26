@@ -30,8 +30,18 @@ Vào **Bảng điều khiển** → điền tên khách hàng → **Tạo hồ s
 Mọi thứ về sau đều thuộc về hồ sơ này. Lần sau dịch cho cùng khách, chọn lại hồ sơ cũ là
 có sẵn bảng thuật ngữ đã dựng.
 
-> **Hồ sơ mật** — bật ô này nếu tài liệu có ràng buộc bảo mật. Khi đó, trước *mỗi* lần
-> công cụ định gửi gì ra ngoài, nó sẽ hiện đúng nội dung sẽ gửi và chờ bạn đồng ý.
+> **Hồ sơ mật** — bật ô này nếu tài liệu có ràng buộc bảo mật. Khi đó công cụ hỏi ý kiến
+> bạn **trước mỗi thao tác** có gửi dữ liệu ra ngoài, và cho bạn biết sẽ gửi tới dịch vụ
+> nào, tối đa bao nhiêu lần.
+>
+> Hộp thoại có hai nút: **Chỉ thao tác này** và **Cho tới khi đóng ứng dụng**. Nút thứ hai
+> chỉ áp dụng cho đúng những dịch vụ ghi trên hộp thoại, và hết hiệu lực thật sự khi bạn
+> đóng công cụ.
+>
+> Với thao tác chỉ gửi một lần — nghe lời thoại, chấm điểm, hỏi trên tài liệu — bạn thấy
+> **nguyên văn, đầy đủ** nội dung sắp gửi. Với **Nghiên cứu** thì không: các câu truy vấn
+> do bước đầu tự sinh nên chưa có gì để hiện lúc bạn bấm đồng ý. Công cụ nói thẳng điều đó
+> thay vì hiện một khung trống, và **mọi lần gửi đều vào màn Bảo mật** để bạn soi lại sau.
 
 ### 2. Nạp tài liệu
 
@@ -70,7 +80,9 @@ Chỗ nên để mắt:
 
 - **Cột cách đọc** — với tên riêng nước ngoài và từ viết tắt. Đây là thứ bạn cần lúc đứng
   dịch, và công cụ cũng dùng nó để đọc đúng khi luyện.
-- **Nhãn ⭐⭐⭐ người dịch** — thuật ngữ lấy từ tài liệu song ngữ, đáng tin nhất.
+- **Nhãn ⭐⭐⭐ ghép từ tài liệu song ngữ** — hai bản tài liệu do người dịch, nhưng việc
+  ghép thuật ngữ Việt ↔ Anh là do máy suy ra. Đáng tin hơn máy đoán từ một ngôn ngữ, nhưng
+  chưa phải "đã có người xác nhận".
 - **Xung đột bản dịch** — khi hai nguồn dịch khác nhau, công cụ hiện cả hai và để **bạn**
   chọn, không tự chọn hộ.
 
@@ -103,7 +115,7 @@ bỏ sót, và **bản dịch tham chiếu** kèm nhãn độ tin cậy:
 
 | Nhãn | Nghĩa |
 |---|---|
-| ⭐⭐⭐ | Bản dịch của người thật, lấy từ tài liệu song ngữ |
+| ⭐⭐⭐ | Câu tìm được **nguyên văn** trong tài liệu song ngữ. Đáng tin hơn máy sinh, nhưng vẫn nên tự đối chiếu xem có đúng là bản dịch của lượt đó không |
 | ⭐⭐ | Bản bạn đã tự chốt trước đó |
 | ⭐ | Máy sinh — chỉ để tham khảo, không phải chuẩn tuyệt đối |
 
@@ -131,9 +143,21 @@ cho bạn biết *khi nào không nên tin điểm máy*. Có nút xem nguyên v
 
 **Lịch sử** — các buổi đã luyện, mở lại buổi bỏ dở, biểu đồ tiến bộ.
 
-**Bảo mật** — nhật ký **mọi** lần dữ liệu rời khỏi máy này. Toàn hệ thống chỉ có ba đường ra:
-gọi mô hình ngôn ngữ, tìm kiếm web, và đọc lời thoại thành giọng nói. Bảng này để bạn tự
-kiểm chứng chứ không phải tin lời.
+**Bảo mật** — nhật ký **mọi** lần công cụ gửi dữ liệu ra ngoài. Toàn hệ thống chỉ có ba
+đường ra: gọi mô hình ngôn ngữ, tìm kiếm web, và đọc lời thoại thành giọng nói. Bảng này
+để bạn tự kiểm chứng chứ không phải tin lời.
+
+Mỗi dòng ghi rõ gửi tới **đâu** — Gemini (Google), DuckDuckGo, edge-tts (Microsoft) hay
+gTTS (Google) — và kết cục:
+
+| Nhãn | Nghĩa |
+|---|---|
+| **bị chặn** | Công cụ đã NGĂN. Chưa có gì rời khỏi máy. |
+| **đã gửi, có phản hồi** | Gửi xong, dịch vụ trả lời bình thường. |
+| **đã gửi, lỗi** | Đã cố gửi rồi hỏng giữa chừng. Không kết luận được dữ liệu đã đi hay chưa — nên vẫn tính là đã gửi. |
+
+Bạn sẽ thấy một thao tác sinh ra **nhiều dòng**: bạn đồng ý một lần cho cả thao tác, nhưng
+nhật ký vẫn ghi riêng từng lần gửi. Đó là chủ ý.
 
 **Dung lượng** — các tệp âm thanh lời thoại được giữ lại để nghe lại không phải chờ.
 Xoá được ở đây khi thấy chiếm nhiều chỗ.
@@ -157,6 +181,10 @@ Xoá được ở đây khi thấy chiếm nhiều chỗ.
 khác trùng tên. Thuật ngữ máy suy đoán có thể sai. Điểm số là để so sánh tiến bộ của chính
 bạn, không phải thước đo nghề nghiệp. **Mọi thứ máy đưa ra đều kèm nguồn để bạn kiểm lại —
 hãy kiểm.**
+
+**Điểm số không phải thước đo nghề nghiệp.** Cùng một mô hình vừa viết bản dịch tham chiếu
+vừa chấm bài của bạn theo chính bản đó, và điểm chưa từng được đối chiếu với một tập bản
+dịch do người chấm. Dùng nó để so tiến bộ của chính bạn qua các buổi.
 
 **Công cụ không tự học lấy.** Nó chỉ nhớ những nhận định bạn viết ra. Càng ghi rõ lý do,
 buổi sau nó chấm càng đúng ý bạn.

@@ -33,11 +33,18 @@ from backend.routes import simulate as simulate_routes
 from backend.routes import speech as speech_routes
 from backend.routes import workspaces as workspace_routes
 from backend.schemas import HealthOut
-from backend.security import llm
-from backend.security.egress import ConsentRequired, PayloadTooLarge
+from backend.security import gateway, llm
+from backend.security.gateway import (
+    ConsentRequired,
+    NoActiveOperation,
+    OperationBudgetExceeded,
+    PayloadTooLarge,
+)
 
 # Số bảng schema phải có. Lệch số này nghĩa là DB chưa tạo đủ.
-EXPECTED_TABLES = 18
+# 21 = 18 bảng nghiệp vụ + operations + operation_calls + pending_consents
+# (consent_tickets cũ đã bị thay bằng consent_grants, không cộng thêm).
+EXPECTED_TABLES = 21
 
 
 @asynccontextmanager
@@ -63,13 +70,48 @@ app = FastAPI(
 
 @app.exception_handler(ConsentRequired)
 async def handle_consent_required(request: Request, exc: ConsentRequired) -> JSONResponse:
-    """Hồ sơ mật chưa có vé đồng ý → 409 kèm bản xem trước để giao diện hỏi chuyên gia."""
+    """Hồ sơ mật chưa cho phép → 409 kèm bản xem trước để giao diện hỏi chuyên gia.
+
+    `operation_id` đi kèm ở đây là thứ giữ cho lần thử lại vào ĐÚNG thao tác vừa được
+    đồng ý. Thiếu nó, request thứ hai đúc một thao tác mới và quyền vừa cấp thành vô dụng
+    — chuyên gia bấm đồng ý xong vẫn bị hỏi lại.
+    """
     return JSONResponse(
         status_code=409,
         content={
             "error": "consent_required",
             "detail": str(exc),
+            "operation_id": exc.preview.operation_id,
             "preview": exc.preview.as_dict(),
+        },
+    )
+
+
+@app.exception_handler(OperationBudgetExceeded)
+async def handle_budget_exceeded(request: Request, exc: OperationBudgetExceeded) -> JSONResponse:
+    """Thao tác gọi ra ngoài nhiều hơn số lần đã cho chuyên gia biết trước."""
+    return JSONResponse(
+        status_code=429,
+        content={"error": "operation_budget", "detail": str(exc)},
+    )
+
+
+@app.exception_handler(NoActiveOperation)
+async def handle_no_operation(request: Request, exc: NoActiveOperation) -> JSONResponse:
+    """Lỗi LẬP TRÌNH, không phải lỗi người dùng: có route gọi ra ngoài mà quên mở thao tác.
+
+    Trả 500 vì đúng là hỏng bên trong. Quan trọng là dữ liệu KHÔNG rời khỏi máy — gateway
+    đã chặn trước khi chạm mạng.
+    """
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "no_active_operation",
+            "detail": (
+                "Có lỗi bên trong: một thao tác định gửi dữ liệu ra ngoài mà chưa xin phép. "
+                "Dữ liệu KHÔNG bị gửi đi. Hãy báo lại lỗi này."
+            ),
+            "debug": str(exc),
         },
     )
 
@@ -185,8 +227,24 @@ def design_tokens() -> dict[str, object]:
 
 @app.post("/system/ping-llm")
 def ping_llm(workspace_id: int | None = None) -> dict[str, object]:
-    """Gọi thử Gemini một lệnh ngắn. Dùng để nghiệm thu GĐ 0: có kết nối + có ghi nhật ký egress."""
-    reply = llm.ping(workspace_id=workspace_id)
+    """Gọi thử Gemini một lệnh ngắn: có kết nối + có ghi nhật ký.
+
+    Vẫn phải mở thao tác như mọi đường ra khác — kể cả một lệnh ping. Cửa 0 của gateway
+    chặn theo runtime chứ không theo thiện chí, nên không có ngoại lệ nào.
+    """
+    with gateway.operation(
+        workspace_id,
+        kind="system.ping",
+        declares=[gateway.OperationDeclaration(
+            "llm", gateway.PROVIDER_GEMINI, unit_calls=1,
+            retries_each=llm.retry_ceiling("light"),
+        )],
+        fingerprint=gateway.fingerprint(
+            method="POST", route="/system/ping-llm", body={"workspace_id": workspace_id}
+        ),
+        payload_preview="(lệnh ping ngắn để kiểm kết nối)",
+    ):
+        reply = llm.ping(workspace_id=workspace_id)
     return {
         "reply": reply,
         "model": settings.gemini_model,

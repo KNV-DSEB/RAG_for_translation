@@ -36,6 +36,22 @@ export async function render(root) {
     )
   );
 
+  // E4 — nói thật về giới hạn của điểm số, ngay tại màn hình bàn về điểm số.
+  //
+  // Cùng một mô hình vừa sinh `reference_translation` vừa chấm bản dịch DỰA TRÊN chính
+  // bản tham chiếu đó. Việc hiệu chỉnh làm điểm dịch chuyển đúng tiêu chí chuyên gia
+  // nhắm tới — điều đó đã đo được — nhưng nó chỉ chứng minh hiệu chỉnh CÓ TÁC DỤNG,
+  // không chứng minh điểm ĐÚNG. Chưa từng có tập bản dịch do người chấm để đối chiếu.
+  // Sổ tay đã ghi điều này; màn hình thì chưa, mà đây mới là nơi chuyên gia nhìn số.
+  root.append(
+    note(
+      "warn",
+      "Điểm của AI chưa từng được đối chiếu với một tập bản dịch do người chấm. Cùng một " +
+        "mô hình vừa viết bản tham chiếu vừa chấm theo bản đó, nên hãy dùng điểm để so " +
+        "tiến bộ của chính bạn qua các buổi, đừng coi là thước đo nghề nghiệp."
+    )
+  );
+
   const slot = el("div");
   root.append(slot);
 

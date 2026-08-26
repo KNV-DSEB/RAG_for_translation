@@ -684,6 +684,21 @@ Cho chuyên gia thấy AI đang chấm lệch bao nhiêu so với mình:
 
 ---
 
+
+> **⚠️ Sửa spec (đợt sửa lớp tin cậy) — §7 đã đổi ở bốn chỗ.** Xem `CLAUDE.md > Bảo mật`.
+>
+> 1. **Cửa ra đổi tên và đổi bản chất.** `security/egress.py` (context manager bọc quanh
+>    lệnh gọi) → `security/gateway.py` (`execute()` đích thân gọi provider). Client mạng
+>    dồn hết vào `security/providers/`. Ba invariant tự động canh: C1a, C1b, C1c.
+> 2. **Đơn vị đồng ý là THAO TÁC, không phải lệnh gọi.** Một lần `/research/run` gọi ra
+>    ngoài tới ~13 lần; hỏi từng lệnh thì thao tác không bao giờ hoàn thành được vì giao
+>    diện thử lại cả request. **Hệ quả phải nói rõ: thao tác nhiều lệnh gọi KHÔNG hiện
+>    trước được nội dung** — đây là mức bảo đảm THẤP HƠN mô tả gốc của §7.
+> 3. **Nhật ký có 3 trạng thái** thay cho cờ `consented` nhị phân. Nhà cung cấp ném lỗi
+>    KHÔNG chứng minh dữ liệu chưa rời máy, nên `attempt_failed` vẫn tính là "đã cố gửi".
+> 4. **`sentence-transformers` tải model từ HuggingFace** — lệnh gọi mạng không mang dữ
+>    liệu khách hàng và không đi qua gateway. Con số "ba đường ra" chỉ nói về dữ liệu hồ sơ.
+
 ## 7. Bảo mật & quyền riêng tư (Q7)
 
 ### 7.1 Điểm mấu chốt: chỉ có ba đường dữ liệu ra khỏi máy

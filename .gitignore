@@ -245,3 +245,13 @@ __marimo__/
 
 # Cloudflared binary (52 MB) — tai lai bang: xem tunnel.ps1
 tools/
+
+# Model embedding tải từ HuggingFace (~470 MB). Để trong data/ nên đã bị /data/* chặn,
+# ghi rõ ra đây để không ai vô tình bỏ chặn. Xem backend/config.py > MODEL_CACHE_DIR.
+/data/model_cache/
+
+# Thư mục tạm của pytest (đặt trên ổ D: vì C: đã đầy — xem pyproject.toml)
+.pytest-tmp/
+
+# Log chạy thử của uvicorn
+.uvicorn.log

@@ -127,7 +127,8 @@ function secretBanner() {
   if (!current?.is_confidential) return;
   const banner = note(
     "secret",
-    `Hồ sơ “${current.name}” đang ở chế độ MẬT — mọi lần gửi dữ liệu ra ngoài đều phải được bạn đồng ý trước.`
+    `Hồ sơ “${current.name}” đang ở chế độ MẬT — dữ liệu chỉ được gửi ra ngoài trong ` +
+        `phạm vi thao tác hoặc phiên mà bạn đã cho phép. Mọi lần gửi đều vào Nhật ký Bảo mật.`
   );
   banner.classList.add("secret-banner");
   main.querySelector(".content-inner")?.prepend(banner);

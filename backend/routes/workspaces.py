@@ -135,7 +135,7 @@ def delete_preview(workspace_id: int) -> dict[str, object]:
         "name": str(row["name"]),
         **{k: int(v or 0) for k, v in data.items()},
         "warning": (
-            "Xoá vĩnh viễn: tài liệu, chỉ mục, bảng thuật ngữ, bản ghi âm và toàn bộ "
+            "Xoá vĩnh viễn: tài liệu, chỉ mục, bảng thuật ngữ, audio lời thoại đã sinh, và toàn bộ "
             "lịch sử của hồ sơ này. Không hoàn tác được."
         ),
     }

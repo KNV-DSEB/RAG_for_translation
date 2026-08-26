@@ -3,8 +3,8 @@
 Input:  prompt (đã gồm sẵn các đoạn ngữ cảnh đã truy hồi) + schema Pydantic mong đợi.
 Output: văn bản, hoặc một instance schema đã validate.
 
-Bắt buộc: mọi lệnh gọi bọc trong `egress.egress(...)` để ghi nhật ký và tôn trọng
-cờ hồ sơ mật (spec §7). Không được import `google.genai` ở bất kỳ module nào khác.
+Bắt buộc: mọi lệnh gọi đi qua `gateway.execute(...)` để ghi nhật ký và tôn trọng
+cờ hồ sơ mật (spec §7). SDK Gemini nằm ở `security/providers/gemini.py`, không nơi khác.
 
 QUẢN LÝ HẠN MỨC FREE TIER (đo thực tế trên chính API key của dự án):
     - Hạn mức là `GenerateRequestsPerDayPerProjectPerModel` — tính riêng cho TỪNG model.
@@ -24,7 +24,7 @@ from typing import Any, Literal, TypeVar
 from pydantic import BaseModel, ValidationError, model_validator
 
 from backend.config import settings
-from backend.security import egress
+from backend.security import gateway
 
 Tier = Literal["quality", "light"]
 
@@ -107,18 +107,14 @@ def model_chain(tier: Tier) -> list[str]:
     return chain
 
 
-def _client() -> Any:
-    """Khởi tạo client. Import bên trong hàm để module này nạp được kể cả khi chưa cài SDK."""
+def _require_key() -> str:
+    """Kiểm cấu hình TRƯỚC khi đụng mạng. Đây là chính sách, không phải lệnh gọi."""
     if not settings.has_gemini_key:
         raise LLMUnavailable(
             "Chưa có GOOGLE_API_KEY. Sao chép .env.example thành .env rồi dán key "
             "lấy miễn phí tại https://aistudio.google.com/apikey"
         )
-    try:
-        from google import genai
-    except ImportError as exc:  # pragma: no cover
-        raise LLMUnavailable("Chưa cài thư viện google-genai. Chạy: uv sync") from exc
-    return genai.Client(api_key=settings.gemini_api_key)
+    return settings.gemini_api_key
 
 
 def _classify(exc: Exception, model: str) -> LLMError:
@@ -154,34 +150,6 @@ def _strip_fence(text: str) -> str:
 # ============================== Lệnh gọi ==============================
 
 
-def _generate_once(
-    client: Any,
-    model: str,
-    prompt: str,
-    system_instruction: str | None,
-    temperature: float,
-    json_mode: bool,
-    response_schema: type[BaseModel] | None,
-) -> str:
-    from google.genai import types
-
-    config_kwargs: dict[str, Any] = {"temperature": temperature}
-    if system_instruction:
-        config_kwargs["system_instruction"] = system_instruction
-    if json_mode:
-        config_kwargs["response_mime_type"] = "application/json"
-        # Ép mô hình sinh đúng hình dạng thay vì chỉ "một JSON nào đó".
-        if response_schema is not None:
-            config_kwargs["response_schema"] = response_schema
-
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(**config_kwargs),
-    )
-    return (getattr(response, "text", None) or "").strip()
-
-
 def _call(
     *,
     module: str,
@@ -198,31 +166,42 @@ def _call(
 
     Tự xử lý hai loại giới hạn: theo phút thì chờ, theo ngày thì đổi model.
     """
-    client = _client()
+    api_key = _require_key()
     chain = model_chain(tier)
     exhausted: list[str] = []
 
-    request = egress.EgressRequest(
-        module=module,
-        destination="llm",
-        payload_text=prompt if not system_instruction else f"{system_instruction}\n\n{prompt}",
-        summary=summary,
-        workspace_id=workspace_id,
-    )
+    payload = prompt if not system_instruction else f"{system_instruction}\n\n{prompt}"
 
     for model in chain:
-        request.endpoint = f"gemini:{model}"
         attempts_left = settings.llm_rate_limit_retries
 
         while True:
+            # Mỗi lần thử là một lệnh gọi mạng riêng, nên là một `EgressRequest` riêng:
+            # một dòng nhật ký riêng, và một lượt trong ngân sách của thao tác.
+            request = gateway.EgressRequest(
+                module=module,
+                destination="llm",
+                provider="gemini",
+                payload_text=payload,
+                summary=summary,
+                workspace_id=workspace_id,
+                endpoint=f"gemini:{model}",
+            )
             try:
-                with egress.egress(request):
-                    text = _generate_once(
-                        client, model, prompt, system_instruction,
-                        temperature, json_mode, response_schema,
-                    )
+                text = gateway.execute(
+                    request,
+                    api_key=api_key,
+                    model=model,
+                    prompt=prompt,
+                    system_instruction=system_instruction,
+                    temperature=temperature,
+                    json_mode=json_mode,
+                    response_schema=response_schema,
+                )
                 break  # gọi xong, thoát vòng chờ
-            except (egress.ConsentRequired, egress.PayloadTooLarge, LLMUnavailable):
+            except (gateway.ConsentRequired, gateway.PayloadTooLarge,
+                    gateway.OperationBudgetExceeded, gateway.NoActiveOperation,
+                    LLMUnavailable):
                 raise
             except Exception as exc:
                 error = _classify(exc, model) if not isinstance(exc, LLMError) else exc
@@ -338,6 +317,19 @@ def ping(workspace_id: int | None = None) -> str:
         summary="Kiểm tra kết nối Gemini (ping)",
         tier="light",
     )
+
+
+def retry_ceiling(tier: Tier = "quality") -> int:
+    """Một lệnh gọi logic có thể phải GỬI LẠI tối đa bao nhiêu lần nữa.
+
+    Suy ra từ cấu hình thật, không đặt số: mỗi model trong chuỗi dự phòng được thử
+    `llm_rate_limit_retries + 1` lần, và chuỗi có thể dài vài model khi hạn mức ngày
+    của model đầu đã cạn.
+
+    Route dùng số này để khai `retries_each`. Đó là những lần gửi LẠI CÙNG một nội dung
+    tới CÙNG Google — không lộ thêm gì, nhưng vẫn phải đếm để chặn vòng lặp chạy loạn.
+    """
+    return max(0, len(model_chain(tier)) * (settings.llm_rate_limit_retries + 1) - 1)
 
 
 def available_models(tier: Tier = "quality") -> list[str]:

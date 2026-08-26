@@ -43,7 +43,7 @@ Mục đích: dùng cá nhân, chi phí 0 đồng, hoàn thành trong 2 tuần.
 - Database: SQLite (đơn giản cho dùng cá nhân)
 - Orchestration: **KHÔNG dùng LangChain.** Gọi thẳng SDK Gemini + ChromaDB, tự viết vòng lặp
   retrieval và vòng lặp research agent. Lý do chính: mọi lệnh gọi ra ngoài BẮT BUỘC đi qua
-  `backend/security/egress.py` để ghi nhật ký và chặn khi hồ sơ mật — framework che giấu
+  `backend/security/gateway.py` để ghi nhật ký và chặn khi hồ sơ mật — framework che giấu
   lệnh gọi thì không bảo đảm được điều này.
 
 ## Ràng buộc phần cứng (đã khảo sát)
@@ -54,7 +54,8 @@ Mục đích: dùng cá nhân, chi phí 0 đồng, hoàn thành trong 2 tuần.
 ## Architecture
 - `/backend` — FastAPI app (`main.py`, `config.py`, `db.py`, `schemas.py`)
 - `/backend/routes` — workspaces, documents, research, glossary, simulate, speech, feedback, history, security
-- `/backend/security` — ⭐ `egress.py` (cửa duy nhất ra ngoài) + `llm.py` (client Gemini)
+- `/backend/security` — ⭐ `gateway.py` (cửa duy nhất ra ngoài) + `providers/` (nơi DUY NHẤT
+  giữ client mạng: gemini, ddgs, tts_edge, tts_gtts) + `llm.py` (chuỗi model dự phòng, quota)
 - `/backend/rag` — extractors, nhận diện ngôn ngữ, chunking, embedding, retrieval
 - `/backend/research` — search, dựng hồ sơ khách hàng, trích thuật ngữ
 - `/backend/simulation` — LLM prompt templates, sinh kịch bản, scoring logic
@@ -105,12 +106,36 @@ Mục đích: dùng cá nhân, chi phí 0 đồng, hoàn thành trong 2 tuần.
 
 ## Bảo mật (bắt buộc, xem `_specs/mvp-spec.md` §7)
 - Chỉ có **đúng ba đường dữ liệu ra khỏi máy**: (E1) gọi LLM, (E2) truy vấn tìm kiếm,
-  (E3) đọc lời thoại bằng edge-tts/gTTS. Cả ba BẮT BUỘC đi qua `backend/security/egress.py`.
-  Không có đường vòng. Lần TTS lấy từ cache không gọi mạng nên không tính là egress.
-  LƯU Ý: E3 phát sinh do đổi TTS sang edge-tts. Thêm bất kỳ dịch vụ mạng nào khác thì
-  PHẢI cho đi qua egress và cập nhật lại con số này.
+  (E3) đọc lời thoại bằng edge-tts/gTTS. Cả ba BẮT BUỘC đi qua `backend/security/gateway.py`.
+  Lần TTS lấy từ cache không gọi mạng nên không tính là egress.
+  LƯU Ý: `sentence-transformers` còn TẢI MODEL từ HuggingFace lần đầu chạy. Đó là lệnh gọi
+  mạng nhưng KHÔNG mang dữ liệu khách hàng, và không đi qua gateway — nêu ra để con số
+  "ba đường" không bị hiểu là "không còn gói tin nào khác rời máy".
+- **`gateway.execute()` gọi provider, không chỉ bọc quanh nó.** Context manager kiểu cũ
+  (`egress()`) thì luôn có thể quên bọc; gateway đích thân gọi thì không có đường vòng.
+  Ba invariant tự động canh, nằm trong `tests/test_c1_single_door.py`:
+  - **C1a** chỉ `security/providers/**` được import `httpx`/`requests`/`gtts`/`edge_tts`/`ddgs`/`google.genai`
+  - **C1b** chỉ `security/gateway.py` được import `security.providers`
+  - **C1c** (runtime) gọi `execute()` ngoài `gateway.operation()` → chặn trước khi chạm mạng
+- **Đơn vị đồng ý là THAO TÁC, không phải lệnh gọi.** Một lần `/research/run` gọi ra ngoài
+  tới ~13 lần; hỏi từng lệnh thì giao diện thử lại cả request và lần chạy không bao giờ kết
+  thúc. Mỗi route egress mở `gateway.operation(kind=..., declares=[...])` khai TRƯỚC gọi ai
+  và tối đa bao nhiêu lần; `max_calls` do MÁY thực thi, câu chữ trên hộp thoại SINH RA từ
+  chính khai báo đó nên không thể lệch. Nhật ký vẫn ghi RIÊNG từng lệnh gọi.
+  Đánh đổi: thao tác nhiều lệnh gọi **không hiện trước được nội dung** — hộp thoại nói thẳng.
+- Quyền cấp bằng `consent_request_id` do máy chủ phát ra; giao diện không khai được đích hay
+  nhà cung cấp. Thao tác vào lại qua header `X-Operation-Id`, phải qua **6 kiểm tra** (tồn
+  tại · đúng hồ sơ · đúng loại · đúng `request_fingerprint` · chưa hết hạn · chưa xong).
+- Nhật ký có **3 trạng thái**: `blocked` (chưa chạm mạng) · `attempt_succeeded` ·
+  `attempt_failed`. Cả hai `attempt_*` đều tính là "đã cố gửi": nhà cung cấp ném lỗi KHÔNG
+  chứng minh dữ liệu chưa rời máy. **Không dùng chữ "đã gửi thành công" ở bất kỳ đâu.**
+- Quyền `session` bị xoá lúc `init_db()` khởi động, nên nhãn "cho tới khi đóng ứng dụng"
+  đúng nghĩa đen.
 - Chỉ gửi **đoạn ngữ cảnh đã truy hồi**, không bao giờ gửi toàn bộ tài liệu.
-- Hồ sơ có cờ mật → phải hiện trước nội dung sẽ gửi và chờ chuyên gia đồng ý.
+- Hồ sơ có cờ mật → chờ chuyên gia đồng ý trước, và hiện trước nội dung **khi biết được**.
+  Thao tác một lệnh gọi (đọc lời thoại, chấm điểm, hỏi tài liệu) thì hiện ĐỦ, không cắt.
+  Thao tác nhiều lệnh gọi (nghiên cứu) thì truy vấn do bước đầu sinh ra nên chưa biết trước
+  — hộp thoại phải NÓI THẲNG điều đó, không hiện khối rỗng cho có.
 - API key chỉ nằm trong `.env`. Không hardcode, **không in ra log kể cả khi báo lỗi**.
 - `.gitignore` đã chặn `/data/*` + `*.doc|docx|pdf` + tệp audio. Trước khi commit luôn kiểm
   `git status` không có tài liệu khách hàng, bản ghi âm, hay DB.
@@ -131,7 +156,7 @@ Luôn theo quy trình: Spec (mô tả tính năng, không code) → Plan Mode (k
 ## Research Agent Module (NEW)
 - Tool tìm kiếm: duckduckgo-search / `ddgs` (free, primary), Tavily API (free tier, fallback nếu cần)
 - Framework: **không dùng LangChain/LangGraph**. Vòng lặp tuần tự tự viết:
-  lập kế hoạch truy vấn → gọi search qua `egress.py` → tổng hợp → trích thuật ngữ.
+  lập kế hoạch truy vấn → gọi search qua `gateway.py` → tổng hợp → trích thuật ngữ.
   Đơn giản, kiểm soát được, và bảo đảm mọi lệnh gọi ra ngoài đều qua đúng một cửa.
 - Input: tên khách hàng, tên đối tác, chủ đề buổi làm việc (do chuyên gia nhập)
 - Output: 
@@ -144,7 +169,9 @@ Luôn theo quy trình: Spec (mô tả tính năng, không code) → Plan Mode (k
 ## Terminology Extraction Logic
 - Input **ba nguồn**, không phải hai:
   1. **Tài liệu song ngữ song song** (cùng nội dung có sẵn cả bản Việt và bản Anh) — ưu tiên cao nhất
-     vì cặp dịch do người thật làm. Gắn nhãn `độ tin = người dịch`.
+     vì cặp dịch do người thật làm. Gắn nhãn `aligned_from_parallel` — **không** phải
+     `human_translated`: hai bản tài liệu đúng là do người dịch, nhưng việc GHÉP thuật ngữ
+     A ↔ B là do LLM suy ra, nên nhãn cũ tuyên bố một mức xác nhận chưa từng xảy ra.
   2. Tài liệu một ngôn ngữ đã nạp → `độ tin = máy suy đoán`
   3. Kết quả web research → `độ tin = máy suy đoán`
 - Method: LLM prompt trích thuật ngữ chuyên ngành. Với tài liệu song ngữ: đưa khối VI + khối EN
@@ -153,7 +180,7 @@ Luôn theo quy trình: Spec (mô tả tính năng, không code) → Plan Mode (k
   - `pronunciation` — cách đọc tên riêng/viết tắt, dùng cho cả TTS đọc đúng (Q6)
   - `status` — `tự nhận` (mặc định, **dùng được ngay không cần duyệt** — Q9) → `chuyên gia sửa` → `bỏ qua`
 - Lưu vào SQLite table `glossary`, khóa duy nhất `(workspace_id, term_vi_normalized)` để chống trùng
-- Thứ tự ưu tiên khi xung đột bản dịch: `chuyên gia sửa` > `người dịch` > `máy suy đoán`.
+- Thứ tự ưu tiên khi xung đột: `expert_edited` > `aligned_from_parallel` > `machine_guess`.
   Dòng chuyên gia đã sửa KHÔNG BAO GIỜ bị lần research sau ghi đè.
 - Tái sử dụng cho mọi buổi dịch sau với cùng khách hàng
 

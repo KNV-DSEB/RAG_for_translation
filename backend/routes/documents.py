@@ -11,7 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from backend.routes._ops import OpContext, op_context
+from backend.security import gateway, llm
+from fastapi import Depends, APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from backend.config import settings
 from backend.db import get_conn
@@ -217,7 +219,9 @@ def delete_document(document_id: int) -> dict[str, Any]:
 
 
 @router.post("/ask")
-def ask_documents(payload: dict[str, Any]) -> dict[str, Any]:
+def ask_documents(
+    payload: dict[str, Any], op: OpContext = Depends(op_context)
+) -> dict[str, Any]:
     """Hỏi đáp trên tài liệu. Câu trả lời luôn kèm trích dẫn hoặc nói rõ không tìm thấy."""
     workspace_id = payload.get("workspace_id")
     question = str(payload.get("question", "")).strip()
@@ -230,9 +234,22 @@ def ask_documents(payload: dict[str, Any]) -> dict[str, Any]:
 
     _require_workspace(int(workspace_id))
 
-    answer = qa.ask(
-        workspace_id=int(workspace_id), question=question, document_ids=document_ids
-    )
+    # Một câu hỏi = một lệnh gọi LLM. Chuỗi model dự phòng và việc thử lại khi bị giới
+    # hạn tần suất đều gửi LẠI cùng nội dung đó, nên chúng là `retries_each` chứ không
+    # phải nội dung mới rời khỏi máy.
+    with gateway.operation(
+        int(workspace_id),
+        kind="documents.ask",
+        declares=[gateway.OperationDeclaration(
+            "llm", gateway.PROVIDER_GEMINI, unit_calls=1, retries_each=llm.retry_ceiling("quality"),
+        )],
+        fingerprint=op.fingerprint,
+        resume_id=op.resume_id,
+        payload_preview=question,
+    ):
+        answer = qa.ask(
+            workspace_id=int(workspace_id), question=question, document_ids=document_ids
+        )
     return {
         "question": answer.question,
         "answer": answer.answer,

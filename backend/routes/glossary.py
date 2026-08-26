@@ -56,7 +56,7 @@ def list_terms(
         params.append(category)
     sql += """
         ORDER BY CASE status WHEN 'expert_edited' THEN 0 ELSE 1 END,
-                 CASE confidence WHEN 'human_translated' THEN 0 ELSE 1 END,
+                 CASE confidence WHEN 'aligned_from_parallel' THEN 0 ELSE 1 END,
                  frequency DESC, term_vi COLLATE NOCASE
     """
 
@@ -85,7 +85,7 @@ def stats(workspace_id: int = Query(...)) -> dict[str, Any]:
             SELECT
               COUNT(*) AS total,
               SUM(CASE WHEN status = 'expert_edited' THEN 1 ELSE 0 END) AS expert_edited,
-              SUM(CASE WHEN confidence = 'human_translated' THEN 1 ELSE 0 END) AS human_translated,
+              SUM(CASE WHEN confidence = 'aligned_from_parallel' THEN 1 ELSE 0 END) AS aligned_from_parallel,
               SUM(CASE WHEN pronunciation IS NOT NULL AND pronunciation <> '' THEN 1 ELSE 0 END)
                   AS with_pronunciation,
               SUM(CASE WHEN source_type = 'web' THEN 1 ELSE 0 END) AS from_web,
@@ -137,7 +137,7 @@ def create_term(payload: TermCreate) -> dict[str, Any]:
                 INSERT INTO glossary
                     (workspace_id, term_vi, term_vi_norm, term_en, pronunciation, definition,
                      category, confidence, status, source_type, source_ref, frequency)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'human_translated', 'expert_edited', 'expert',
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'aligned_from_parallel', 'expert_edited', 'expert',
                         'chuyên gia nhập', 1)
                 """,
                 (
@@ -262,7 +262,7 @@ def export_csv(workspace_id: int = Query(...)) -> StreamingResponse:
             "Độ tin", "Trạng thái", "Loại nguồn", "Nguồn", "Tần suất",
         ]
     )
-    label = {"human_translated": "người dịch", "machine_guess": "máy suy đoán"}
+    label = {"aligned_from_parallel": "ghép từ tài liệu song ngữ", "machine_guess": "máy suy đoán"}
     status_label = {"auto": "tự nhận", "expert_edited": "chuyên gia sửa", "skipped": "bỏ qua"}
     for row in rows:
         writer.writerow(

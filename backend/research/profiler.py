@@ -241,68 +241,11 @@ _BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
 
-# Trạng thái liên kết. Phân biệt "chặn kiểm tự động" với "chết thật" là quan trọng:
-# đo thực tế trên bộ LDSC, Wikipedia và thuvienphapluat.vn đều trả 403 cho request tự
-# động nhưng mở bằng trình duyệt hoàn toàn bình thường. Gán nhãn "chết" cho chúng sẽ
-# khiến chuyên gia mất tin vào nguồn tốt — sai còn tệ hơn không kiểm.
-LinkStatus = Literal["ok", "blocked", "dead", "unchecked"]
-
-
-def check_urls_reachable(urls: set[str], timeout: float = 8.0) -> dict[str, str]:
-    """Kiểm nhanh từng URL, trả về {url: 'ok' | 'blocked' | 'dead'}.
-
-        ok      — mở được bình thường (2xx/3xx)
-        blocked — server từ chối kiểm tự động (401/403/429), nhưng trình duyệt vẫn mở được
-        dead    — không tồn tại (404/410) hoặc không kết nối được (DNS/timeout)
-
-    Không tính là egress mới: chỉ mở lại đúng các URL mà công cụ tìm kiếm đã trả về,
-    không gửi thêm dữ liệu nào của hồ sơ ra ngoài.
-    """
-    import concurrent.futures
-
-    import httpx
-
-    def classify(status_code: int) -> str:
-        """Phân loại theo mức độ CHẮC CHẮN, không liệt kê mã lỗi.
-
-        Server có phản hồi nghĩa là tên miền còn sống — chỉ 404/410 mới khẳng định được
-        trang đã mất. Mọi mã khác là "không kiểm được", vì mỗi trang chặn bot một kiểu:
-        đo thực tế trên bộ LDSC — Wikipedia 403, LinkedIn 999, Facebook 400.
-        Chỉ khi không kết nối được (DNS/timeout) mới kết luận là chết.
-        """
-        if status_code < 400:
-            return "ok"
-        if status_code in (404, 410):
-            return "dead"
-        return "blocked"
-
-    def probe(url: str) -> tuple[str, str]:
-        headers = {"User-Agent": _BROWSER_UA}
-        try:
-            with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-                response = client.head(url, headers=headers)
-                # Nhiều trang chặn HEAD nhưng vẫn cho GET — thử lại trước khi kết luận.
-                if response.status_code >= 400:
-                    response = client.get(url, headers=headers)
-                return url, classify(response.status_code)
-        except Exception:
-            return url, "dead"
-
-    if not urls:
-        return {}
-    statuses: dict[str, str] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        for url, status in pool.map(probe, urls):
-            statuses[url] = status
-    return statuses
-
-
 def _save_outcome(
     run_id: int,
     workspace_id: int,
     bundle: ProfileBundleOut,
     valid_urls: set[str],
-    url_status: dict[str, str] | None = None,
 ) -> list[EntityProfile]:
     """Lưu hồ sơ, GIỮ NGUYÊN các trường chuyên gia đã sửa tay (spec A2.12)."""
     entities: list[EntityProfile] = []
@@ -342,22 +285,23 @@ def _save_outcome(
 
                 # Chỉ giữ URL thật sự có trong kết quả tìm kiếm — chặn URL do mô hình bịa.
                 urls = [u.strip() for u in item.source_urls if u.strip() in valid_urls]
-                verified = bool(urls) and not item.is_inference
+                # CÓ NGUỒN, không phải ĐÃ XÁC MINH — xem ghi chú ở db.py.
+                has_source = bool(urls) and not item.is_inference
 
                 field_id = int(
                     conn.execute(
                         """
-                        INSERT INTO profile_fields (profile_id, field_key, value, is_verified)
+                        INSERT INTO profile_fields (profile_id, field_key, value, has_source)
                         VALUES (?, ?, ?, ?)
                         """,
-                        (profile_id, item.field_key, item.value.strip(), int(verified)),
+                        (profile_id, item.field_key, item.value.strip(), int(has_source)),
                     ).lastrowid
                     or 0
                 )
                 for url in urls:
                     conn.execute(
-                        "INSERT INTO profile_sources (profile_field_id, url, reachable) VALUES (?, ?, ?)",
-                        (field_id, url, (url_status or {}).get(url, "unchecked")),
+                        "INSERT INTO profile_sources (profile_field_id, url) VALUES (?, ?)",
+                        (field_id, url),
                     )
 
                 saved_fields.append(
@@ -460,32 +404,8 @@ def run_research(
 
         valid_urls = {r.url for r in results}
 
-        # Chỉ kiểm những URL thực sự được LLM trích dẫn, không kiểm cả 55 nguồn.
-        cited_urls = {
-            u.strip()
-            for entity in bundle.entities
-            for item in entity.fields
-            for u in item.source_urls
-            if u.strip() in valid_urls
-        }
-        report(f"Kiểm {len(cited_urls)} liên kết nguồn có mở được không…")
-        url_status = check_urls_reachable(cited_urls)
-        n_dead = sum(1 for s in url_status.values() if s == "dead")
-        n_blocked = sum(1 for s in url_status.values() if s == "blocked")
-        if n_dead:
-            outcome.warnings.append(
-                f"{n_dead}/{len(url_status)} liên kết nguồn không truy cập được (trang đã đổi "
-                "hoặc tạm sập) — đã đánh dấu 'link chết' để bạn không mất thời gian bấm vào."
-            )
-        if n_blocked:
-            outcome.warnings.append(
-                f"{n_blocked}/{len(url_status)} liên kết chặn kiểm tự động nhưng MỞ BẰNG "
-                "TRÌNH DUYỆT VẪN ĐƯỢC (ví dụ Wikipedia, thuvienphapluat.vn). "
-                "Đây không phải link chết."
-            )
-
         outcome.entities = _save_outcome(
-            run_id, workspace_id, bundle, valid_urls, url_status
+            run_id, workspace_id, bundle, valid_urls
         )
         outcome.not_found_notes.extend(bundle.not_found_notes)
         outcome.ambiguity_warning = bundle.ambiguity_warning.strip()

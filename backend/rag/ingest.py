@@ -227,11 +227,23 @@ def delete_document(document_id: int) -> bool:
 
 
 def delete_workspace_data(workspace_id: int) -> None:
-    """Dọn sạch tệp và chỉ mục của một hồ sơ trước khi xoá bản ghi (spec A7.6)."""
+    """Dọn sạch tệp và chỉ mục của một hồ sơ trước khi xoá bản ghi (spec A7.6).
+
+    Ba chỗ, không phải hai. `workspaces.py` nói với chuyên gia là "xoá vĩnh viễn hồ sơ và
+    toàn bộ dữ liệu liên quan" — nên audio lời thoại cũng phải đi, nếu không câu đó sai.
+    Trước đây không xoá được vì khoá cache là hash toàn cục không mang hồ sơ; giờ cache
+    chia theo thư mục hồ sơ nên dọn được (xem `speech/tts.py`).
+    """
     try:
         store.delete_workspace(workspace_id)
     except Exception:
         pass
+
     folder = settings.documents_dir / str(workspace_id)
     if folder.exists():
         shutil.rmtree(folder, ignore_errors=True)
+
+    # Import tại chỗ: `speech` kéo theo cấu hình giọng đọc, không cần cho luồng nạp tài liệu.
+    from backend.speech import tts
+
+    tts.delete_workspace_cache(workspace_id)

@@ -12,7 +12,9 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from backend.routes._ops import OpContext, op_context
+from backend.security import gateway, llm
+from fastapi import Depends, APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.db import get_conn
@@ -27,11 +29,9 @@ class ScriptRequest(BaseModel):
     topic: str = Field(min_length=1)
     client_name: str | None = None
     partner_names: list[str] = Field(default_factory=list)
-    mode: Literal["consecutive", "simultaneous"] = "consecutive"
     difficulty: Literal["basic", "medium", "hard"] = "medium"
     n_turns: int = Field(default=8, ge=8, le=10)
     hide_script: bool = True
-    glossary_scope: str = "all"
     engagement_id: int | None = None
 
 
@@ -68,7 +68,7 @@ def get_context(workspace_id: int = Query(...)) -> dict[str, Any]:
                                                 AND status='ready')                      AS n_parallel,
               (SELECT COUNT(*) FROM glossary  WHERE workspace_id = ? AND status <> 'skipped') AS n_terms,
               (SELECT COUNT(*) FROM glossary  WHERE workspace_id = ? AND status = 'expert_edited') AS n_expert_terms,
-              (SELECT COUNT(*) FROM glossary  WHERE workspace_id = ? AND confidence='human_translated') AS n_human_terms,
+              (SELECT COUNT(*) FROM glossary  WHERE workspace_id = ? AND confidence='aligned_from_parallel') AS n_human_terms,
               (SELECT COUNT(*) FROM profiles  WHERE workspace_id = ?)                     AS n_profiles
             """,
             (workspace_id,) * 6,
@@ -89,6 +89,12 @@ def get_context(workspace_id: int = Query(...)) -> dict[str, Any]:
             "Chưa có hồ sơ khách hàng — kịch bản sẽ chung chung. "
             "Chạy Nghiên cứu trước để kịch bản dùng đúng bối cảnh thật."
         )
+    if data["n_fields_unsourced"]:
+        warnings.append(
+            f"{data['n_fields_unsourced']}/{data['n_fields']} trường hồ sơ chưa có nguồn — "
+            "KHÔNG được đưa vào kịch bản, để bạn không luyện tập trên số liệu máy suy đoán. "
+            "Vào màn Nghiên cứu xác minh hoặc sửa lại thì chúng sẽ được dùng."
+        )
     if data["n_terms"] < 5:
         warnings.append(
             f"Bảng thuật ngữ chỉ có {data['n_terms']} mục — kịch bản sẽ ít thuật ngữ chuyên ngành."
@@ -103,22 +109,33 @@ def get_context(workspace_id: int = Query(...)) -> dict[str, Any]:
 
 
 @router.post("/script")
-def create_script(payload: ScriptRequest) -> dict[str, Any]:
+def create_script(
+    payload: ScriptRequest, op: OpContext = Depends(op_context)
+) -> dict[str, Any]:
     """Sinh kịch bản mới. Tự kiểm và sinh lại một lần nếu chưa đạt chuẩn."""
     workspace = _require_workspace(payload.workspace_id)
 
-    result = generate_script(
-        workspace_id=payload.workspace_id,
-        topic=payload.topic.strip(),
-        client_name=(payload.client_name or str(workspace["name"])).strip(),
-        partner_names=[p.strip() for p in payload.partner_names if p.strip()],
-        mode=payload.mode,
-        difficulty=payload.difficulty,
-        n_turns=payload.n_turns,
-        hide_script=payload.hide_script,
-        glossary_scope=payload.glossary_scope,
-        engagement_id=payload.engagement_id,
-    )
+    # 2 nội dung: lần sinh đầu, và lần sinh lại khi bản đầu không đạt chuẩn.
+    with gateway.operation(
+        payload.workspace_id,
+        kind="simulate.script",
+        declares=[gateway.OperationDeclaration(
+            "llm", gateway.PROVIDER_GEMINI, unit_calls=2,
+            retries_each=llm.retry_ceiling("quality"),
+        )],
+        fingerprint=op.fingerprint,
+        resume_id=op.resume_id,
+    ):
+        result = generate_script(
+            workspace_id=payload.workspace_id,
+            topic=payload.topic.strip(),
+            client_name=(payload.client_name or str(workspace["name"])).strip(),
+            partner_names=[p.strip() for p in payload.partner_names if p.strip()],
+            difficulty=payload.difficulty,
+            n_turns=payload.n_turns,
+            hide_script=payload.hide_script,
+            engagement_id=payload.engagement_id,
+        )
     return get_session(result.session_id)
 
 
@@ -222,11 +239,36 @@ def submit_attempt(payload: AttemptRequest) -> dict[str, Any]:
     return {"attempt_id": attempt_id, "turn_id": payload.turn_id, "session_id": session_id}
 
 
+def _workspace_of_attempt(attempt_id: int) -> int | None:
+    """Hồ sơ mà lần dịch này thuộc về — cần để biết có phải xin phép hay không."""
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT s.workspace_id FROM turn_attempts a
+            JOIN mock_sessions s ON s.id = a.session_id
+            WHERE a.id = ?
+            """,
+            (attempt_id,),
+        ).fetchone()
+    return int(row["workspace_id"]) if row else None
+
+
 @router.post("/attempts/{attempt_id}/score")
-def score(attempt_id: int) -> dict[str, Any]:
+def score(attempt_id: int, op: OpContext = Depends(op_context)) -> dict[str, Any]:
     """Chấm một lần dịch theo 4 tiêu chí, thang 10."""
+    workspace_id = _workspace_of_attempt(attempt_id)
     try:
-        result = scorer.score_attempt(attempt_id)
+        with gateway.operation(
+            workspace_id,
+            kind="simulate.score",
+            declares=[gateway.OperationDeclaration(
+                "llm", gateway.PROVIDER_GEMINI, unit_calls=1,
+                retries_each=llm.retry_ceiling("light"),
+            )],
+            fingerprint=op.fingerprint,
+            resume_id=op.resume_id,
+        ):
+            result = scorer.score_attempt(attempt_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

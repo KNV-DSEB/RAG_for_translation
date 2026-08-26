@@ -13,7 +13,6 @@ dependencies = [
     "pydantic>=2.7",
     "python-dotenv>=1.0",
     "python-multipart>=0.0.9",  # upload tệp qua FastAPI
-    "httpx>=0.27",              # frontend -> backend
 
     # --- LLM (Gemini) ---
     "google-genai>=1.0",
@@ -47,6 +46,22 @@ dependencies = [
     # --- Tiện ích ---
     "psutil>=5.9",              # theo dõi RAM ở /health (ngân sách 7.8 GB)
 ]
+
+[dependency-groups]
+# Chỉ dùng khi phát triển. `httpx` nằm đây vì sau khi bỏ `check_urls_reachable`
+# (plan A3) không còn code chạy nào gọi mạng bằng httpx — chỉ `TestClient` cần.
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",              # chỉ để fastapi.testclient.TestClient chạy được
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `--basetemp` trỏ vào ổ chứa dự án. Mặc định pytest dùng %TEMP% trên ổ C:, mà C: trên
+# máy này đã đầy — mọi test có ghi đĩa sẽ chết với "database or disk is full", một thông
+# báo không hề nói rằng nguyên nhân nằm ngoài dự án.
+addopts = "-q --basetemp=.pytest-tmp"
+pythonpath = ["."]
 
 [tool.uv]
 # Đây là ứng dụng, không phải thư viện cần build

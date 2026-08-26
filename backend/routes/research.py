@@ -12,10 +12,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.config import settings
 from backend.db import get_conn
+from backend.routes._ops import OpContext, op_context
+from backend.security import gateway, llm
 from backend.research.orchestrator import run_full_research
 from backend.research.profiler import FIELD_LABELS
 
@@ -40,21 +43,44 @@ def _require_workspace(workspace_id: int) -> None:
 
 
 @router.post("/run")
-def run(payload: ResearchRequest) -> dict[str, Any]:
+def run(payload: ResearchRequest, op: OpContext = Depends(op_context)) -> dict[str, Any]:
     """Chạy một lần nghiên cứu hoàn chỉnh: hồ sơ khách hàng + bảng thuật ngữ."""
     _require_workspace(payload.workspace_id)
 
     steps: list[str] = []
-    result = run_full_research(
-        workspace_id=payload.workspace_id,
-        client_name=payload.client_name.strip(),
-        partner_names=[p.strip() for p in payload.partner_names if p.strip()],
-        topic=payload.topic.strip(),
-        industry=payload.industry,
-        extra_notes=payload.extra_notes,
-        engagement_id=payload.engagement_id,
-        on_progress=steps.append,
-    )
+    # ĐÂY là thao tác khiến consent phải gắn với thao tác chứ không gắn với từng lệnh gọi:
+    # một lần chạy gọi ra ngoài hơn chục lần. Hỏi ý kiến từng lệnh thì giao diện thử lại
+    # cả request, các lệnh đã chạy sẽ chạy lại, và lần chạy không bao giờ kết thúc.
+    #
+    # Cả hai con số đều lấy từ cấu hình đang chạy, không đặt số mới:
+    #   search  = hạn mức truy vấn của `QueryBudget`
+    #   llm     = 1 lập kế hoạch + 1 tổng hợp hồ sơ + 3 trích thuật ngữ
+    with gateway.operation(
+        payload.workspace_id,
+        kind="research.run",
+        declares=[
+            gateway.OperationDeclaration(
+                "search", gateway.PROVIDER_DDGS,
+                unit_calls=settings.max_search_queries, retries_each=2,
+            ),
+            gateway.OperationDeclaration(
+                "llm", gateway.PROVIDER_GEMINI,
+                unit_calls=5, retries_each=llm.retry_ceiling("quality"),
+            ),
+        ],
+        fingerprint=op.fingerprint,
+        resume_id=op.resume_id,
+    ):
+        result = run_full_research(
+            workspace_id=payload.workspace_id,
+            client_name=payload.client_name.strip(),
+            partner_names=[p.strip() for p in payload.partner_names if p.strip()],
+            topic=payload.topic.strip(),
+            industry=payload.industry,
+            extra_notes=payload.extra_notes,
+            engagement_id=payload.engagement_id,
+            on_progress=steps.append,
+        )
 
     return {
         "research_run_id": result.research_run_id,
@@ -131,7 +157,7 @@ def get_profiles(workspace_id: int = Query(...)) -> list[dict[str, Any]]:
                         "field_key": str(item["field_key"]),
                         "label": FIELD_LABELS.get(str(item["field_key"]), str(item["field_key"])),
                         "value": item["value"],
-                        "is_verified": bool(item["is_verified"]),
+                        "has_source": bool(item["has_source"]),
                         "is_expert_edited": bool(item["is_expert_edited"]),
                         "sources": [dict(s) for s in sources],
                     }

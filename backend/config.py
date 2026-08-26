@@ -19,6 +19,23 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 
+# ============================== Nơi để model tải về ==============================
+# `sentence-transformers` tải model embedding (~470 MB) từ HuggingFace và mặc định cất
+# vào `%USERPROFILE%\.cache\huggingface` — tức ổ C:. Trên máy này ổ C: đã đầy, và lần
+# tải hỏng giữa chừng làm CẢ đường RAG chết với một lỗi không nói gì về nguyên nhân
+# ("OSError: not enough space on the disk").
+#
+# Đặt ở đây chứ không chỉ trong `run.ps1`: phải đúng với mọi cách khởi động — uvicorn gọi
+# tay, pytest, lối tắt trên màn hình nền. `setdefault` để ai đã tự đặt HF_HOME thì giữ
+# nguyên ý của họ.
+#
+# Phải chạy TRƯỚC khi bất kỳ chỗ nào import `sentence_transformers`/`transformers`, vì
+# hai thư viện đó đọc biến môi trường ngay lúc nạp module.
+MODEL_CACHE_DIR = BASE_DIR / "data" / "model_cache"
+os.environ.setdefault("HF_HOME", str(MODEL_CACHE_DIR))
+os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(MODEL_CACHE_DIR))
+
+
 def _env_int(key: str, default: int) -> int:
     raw = os.getenv(key)
     return int(raw) if raw and raw.strip().isdigit() else default

@@ -54,7 +54,7 @@ def _count_terms(workspace_id: int) -> tuple[int, int]:
         row = conn.execute(
             """
             SELECT COUNT(*) AS total,
-                   SUM(CASE WHEN confidence = 'human_translated' THEN 1 ELSE 0 END) AS human
+                   SUM(CASE WHEN confidence = 'aligned_from_parallel' THEN 1 ELSE 0 END) AS human
             FROM glossary WHERE workspace_id = ? AND status <> 'skipped'
             """,
             (workspace_id,),

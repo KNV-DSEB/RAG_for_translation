@@ -76,7 +76,7 @@ function profileField(item, reload) {
         text: item.label,
       }),
       // Không có nguồn thì phải nói rõ, không trộn lẫn với thông tin đã xác minh (A2.5)
-      item.is_verified
+      item.has_source
         ? el("span.badge.badge-ok", { text: "có nguồn" })
         : el("span.badge.badge-warn", { text: "chưa xác minh" }),
       item.is_expert_edited && el("span.badge.badge-ok", { text: "bạn đã sửa" }),
@@ -108,7 +108,7 @@ function profileField(item, reload) {
         })
       )
     );
-  } else if (!item.is_verified) {
+  } else if (!item.has_source) {
     box.append(
       el("div", {
         style: "margin-top:6px;font-size:var(--t-xs);color:var(--warn)",
@@ -288,7 +288,7 @@ export async function render(root) {
 
     if (profiles.length) {
       const nVerified = profiles.reduce(
-        (sum, p) => sum + p.fields.filter((f) => f.is_verified).length,
+        (sum, p) => sum + p.fields.filter((f) => f.has_source).length,
         0
       );
       const nTotal = profiles.reduce((sum, p) => sum + p.fields.length, 0);

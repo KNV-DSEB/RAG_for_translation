@@ -17,7 +17,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from backend.routes._ops import OpContext, op_context
+from backend.security import gateway
+from fastapi import Depends, APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -76,7 +78,11 @@ def get_audio(key: str) -> FileResponse:
 
 
 @router.post("/turn-audio/{turn_id}")
-def turn_audio(turn_id: int, speed: str = Query(default="normal")) -> dict[str, Any]:
+def turn_audio(
+    turn_id: int,
+    speed: str = Query(default="normal"),
+    op: OpContext = Depends(op_context),
+) -> dict[str, Any]:
     """Sinh (hoặc lấy từ cache) audio cho một lượt thoại, dùng giọng theo nhân vật."""
     with get_conn() as conn:
         turn = conn.execute(
@@ -93,13 +99,24 @@ def turn_audio(turn_id: int, speed: str = Query(default="normal")) -> dict[str, 
     if speed not in ("slow", "normal", "fast"):
         speed = "normal"
 
+    # Khai TRƯỚC cả hai nhà cung cấp: edge-tts (Microsoft) và gTTS (Google). Chuyên gia
+    # thấy ngay từ hộp thoại đầu tiên rằng có khả năng chuyển sang bên dự phòng, nên khi
+    # edge hỏng thật thì gTTS chạy tiếp mà không bị hỏi lại giữa chừng.
     try:
-        result = tts.synthesize(
-            str(turn["source_text"]),
-            str(turn["source_lang"]),  # type: ignore[arg-type]
-            workspace_id=int(turn["workspace_id"]),
-            speed=speed,  # type: ignore[arg-type]
-        )
+        with gateway.operation(
+            int(turn["workspace_id"]),
+            kind="tts.speak",
+            declares=list(tts.TTS_DECLARES),
+            fingerprint=op.fingerprint,
+            resume_id=op.resume_id,
+            payload_preview=str(turn["source_text"]),
+        ):
+            result = tts.synthesize(
+                str(turn["source_text"]),
+                str(turn["source_lang"]),  # type: ignore[arg-type]
+                workspace_id=int(turn["workspace_id"]),
+                speed=speed,  # type: ignore[arg-type]
+            )
     except tts.TtsError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -201,7 +218,9 @@ def storage(workspace_id: int | None = Query(default=None)) -> dict[str, Any]:
         sentry["n_files"] += 1
         sentry["bytes"] += size
 
-    cache = tts.cache_stats()
+    # Cache giờ chia theo hồ sơ, nên thống kê cũng phải theo hồ sơ đang xem —
+    # không thì màn Dung lượng báo con số của cả máy cho một hồ sơ.
+    cache = tts.cache_stats(workspace_id)
 
     return {
         "recordings": {
@@ -303,9 +322,24 @@ def delete_recordings(
 
 
 @router.delete("/tts-cache")
-def clear_tts_cache() -> dict[str, Any]:
-    """Xoá cache audio lời thoại. Lần nghe sau sẽ sinh lại (chậm hơn một chút)."""
-    n = tts.clear_cache()
+def clear_tts_cache(workspace_id: int | None = Query(default=None)) -> dict[str, Any]:
+    """Xoá cache audio lời thoại. Lần nghe sau sẽ sinh lại (chậm hơn một chút).
+
+    Nêu `workspace_id` thì chỉ xoá của hồ sơ đó — cần cho việc dọn riêng một hồ sơ mật
+    mà không đụng tới phần còn lại.
+    """
+    n = tts.clear_cache(workspace_id)
     with get_conn() as conn:
-        conn.execute("UPDATE mock_turns SET tts_path = NULL")
-    return {"deleted": n, "message": f"Đã xoá {n} tệp audio trong cache."}
+        if workspace_id is None:
+            conn.execute("UPDATE mock_turns SET tts_path = NULL")
+        else:
+            conn.execute(
+                """
+                UPDATE mock_turns SET tts_path = NULL WHERE session_id IN (
+                    SELECT id FROM mock_sessions WHERE workspace_id = ?
+                )
+                """,
+                (workspace_id,),
+            )
+    scope = "của hồ sơ này" if workspace_id is not None else "trong cache"
+    return {"deleted": n, "message": f"Đã xoá {n} tệp audio {scope}."}

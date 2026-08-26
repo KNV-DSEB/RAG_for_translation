@@ -27,7 +27,10 @@ import {
 const LANG = { vi: "tiếng Việt", en: "tiếng Anh" };
 
 const TIER = {
-  human: ["badge-ok", "⭐⭐⭐ bản dịch của người thật"],
+  // Bằng chứng có được: câu này xuất hiện NGUYÊN VĂN trong tài liệu song ngữ.
+  // Nó KHÔNG chứng minh đây là bản dịch của đúng lượt nguồn này — nên nhãn không được
+  // nói "bản dịch của người thật". Xem `generator.py > _is_verbatim_in`.
+  verbatim_parallel: ["badge-ok", "⭐⭐⭐ nguyên văn trong tài liệu song ngữ"],
   expert_pinned: ["badge-ok", "⭐⭐ bạn đã chốt"],
   ai: ["badge-mute", "⭐ AI sinh"],
 };
@@ -69,7 +72,7 @@ async function configView(root, workspace) {
           stats([
             ["Hồ sơ đã dựng", fmtNum(context.n_profiles)],
             ["Thuật ngữ", fmtNum(context.n_terms)],
-            ["⭐⭐⭐ người dịch", fmtNum(context.n_human_terms)],
+            ["⭐⭐⭐ ghép từ tài liệu song ngữ", fmtNum(context.n_human_terms)],
             ["Tài liệu song ngữ", fmtNum(context.n_parallel)],
           ])
         )
@@ -121,7 +124,6 @@ function configForm(workspace, context) {
             difficulty: difficulty.value,
             n_turns: Number(turns.value),
             hide_script: hide.checked,
-            mode: "consecutive",
           });
           ok("Đã sinh kịch bản.");
           await store.touchWorkspace(workspace.id);
@@ -139,7 +141,8 @@ function configForm(workspace, context) {
         el("div", { style: "font-size:var(--t-xs);color:var(--ink-3)",
           text: "Giống buổi thật: bạn nghe rồi dịch, không đọc chữ trước. Bản gốc hiện sau khi chấm." }))),
     el("p.card-sub", { style: "margin-bottom:16px",
-      text: "Mỗi lượt khoảng 5 câu, đọc lên 30–60 giây. Hai nhân vật nói xen kẽ Việt–Anh nên bạn dịch cả hai chiều." }),
+      text: "Mỗi lượt khoảng 5 câu, đọc lên 30–60 giây (chấp nhận 24–78 giây vì ước lượng " +
+            "thời lượng tính từ số từ nên có sai số). Hai nhân vật nói xen kẽ Việt–Anh nên bạn dịch cả hai chiều." }),
     submit
   );
 }

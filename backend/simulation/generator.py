@@ -32,7 +32,6 @@ MAX_TERMS_IN_PROMPT = 24
 # Độ dài tài liệu thật đưa vào prompt.
 MAX_AUTHENTIC_CHARS = 5000
 # Tỷ lệ từ trùng tối thiểu để công nhận một lượt đúng là lấy nguyên văn từ tài liệu.
-VERBATIM_MIN_OVERLAP = 0.6
 
 _SENTENCE_SPLIT = re.compile(r"[.!?…]+(?:\s|$)")
 
@@ -92,13 +91,29 @@ class GeneratedScript:
 
 
 def _profile_text(workspace_id: int) -> str:
-    """Gom hồ sơ các bên thành văn bản ngắn để đưa vào prompt."""
+    """Gom hồ sơ các bên thành văn bản ngắn để đưa vào prompt.
+
+    CHỈ lấy trường có nguồn, hoặc trường chuyên gia đã tự sửa.
+
+    Trước đây hàm này lấy tất, không lọc, không đánh dấu. Hậu quả: một trường mà màn
+    Nghiên cứu đang hiện badge đỏ "đây là suy luận của máy, tự kiểm lại trước khi dùng"
+    vẫn đi thẳng vào prompt sinh kịch bản, lẫn với thông tin có nguồn, rồi thành lời
+    thoại nhân vật nói ra như sự thật. Chuyên gia luyện tập trên số liệu máy bịa.
+
+    Cách sửa đã cân nhắc và bỏ: đánh dấu `[CHƯA CÓ NGUỒN]` rồi dặn LLM đừng dùng. Đó là
+    ràng buộc mềm — LLM vẫn dùng được, và tiêu đề "không được thành lời thoại" lại mạnh
+    hơn thứ code bảo đảm. Một mệnh đề WHERE thì vừa chặt vừa rẻ hơn.
+
+    Đổi lại có một quy trình đúng: muốn một dữ kiện vào kịch bản luyện tập thì phải xác
+    minh hoặc sửa nó — lúc đó `is_expert_edited = 1` và nó được vào.
+    """
     with get_conn() as conn:
         rows = conn.execute(
             """
             SELECT p.entity_name, p.entity_role, f.field_key, f.value
             FROM profiles p JOIN profile_fields f ON f.profile_id = p.id
             WHERE p.workspace_id = ?
+              AND (f.has_source = 1 OR f.is_expert_edited = 1)
               AND p.id = (SELECT MAX(p2.id) FROM profiles p2
                           WHERE p2.workspace_id = p.workspace_id AND p2.entity_name = p.entity_name)
             ORDER BY CASE p.entity_role WHEN 'client' THEN 0 ELSE 1 END, p.entity_name, f.id
@@ -123,7 +138,7 @@ def _glossary_for_prompt(workspace_id: int) -> tuple[str, dict[str, int]]:
             SELECT id, term_vi, term_vi_norm, term_en, definition, category
             FROM glossary WHERE workspace_id = ? AND status <> 'skipped'
             ORDER BY CASE status WHEN 'expert_edited' THEN 0 ELSE 1 END,
-                     CASE confidence WHEN 'human_translated' THEN 0 ELSE 1 END,
+                     CASE confidence WHEN 'aligned_from_parallel' THEN 0 ELSE 1 END,
                      frequency DESC
             LIMIT ?
             """,
@@ -188,13 +203,49 @@ def count_sentences(text: str) -> int:
     return max(1, len(parts))
 
 
-def _token_overlap(a: str, b: str) -> float:
-    """Tỷ lệ từ của `a` xuất hiện trong `b`. Dùng để kiểm lời khai verbatim."""
-    tokens_a = {w for w in re.findall(r"\w+", a.lower()) if len(w) > 3}
-    if not tokens_a:
-        return 0.0
-    tokens_b = {w for w in re.findall(r"\w+", b.lower()) if len(w) > 3}
-    return len(tokens_a & tokens_b) / len(tokens_a)
+def _normalize_for_verbatim(text: str) -> str:
+    """Chuẩn hoá để so nguyên văn: thường hoá, bỏ dấu câu, gộp khoảng trắng."""
+    lowered = re.sub(r"[^\w\s]", " ", text.lower())
+    return " ".join(lowered.split())
+
+
+def _is_verbatim_in(candidate: str, document_text: str) -> bool:
+    """Câu này có xuất hiện NGUYÊN VĂN trong tài liệu không.
+
+    Trước đây chỗ này đo tỷ lệ TỪ VỰNG trùng nhau theo tập hợp, ngưỡng 0.6 — một cách
+    đo hỏng theo đúng chiều nguy hiểm nhất:
+
+      • bỏ thứ tự từ, nên "A gửi tiền cho B" và "B gửi tiền cho A" là như nhau;
+      • mẫu số là số từ của MỘT CÂU, còn đống rơm là TOÀN BỘ phần tiếng Anh của tài liệu;
+      • do đó tài liệu càng dài thì càng dễ dương tính giả — sai theo hướng ngược với
+        mong muốn, vì tài liệu dài mới là tài liệu hay gặp.
+
+    Một câu do AI viết chỉ cần dùng chung từ vựng hành chính là đủ vượt ngưỡng, rồi được
+    gắn nhãn "bản dịch của người thật". Kiểm chuỗi con thì không có kiểu dương tính giả đó.
+    """
+    if not candidate.strip() or not document_text.strip():
+        return False
+    return _normalize_for_verbatim(candidate) in _normalize_for_verbatim(document_text)
+
+
+# Biên độ quanh khoảng 30–60 giây mà giao diện nói với chuyên gia.
+#
+# Trước đây là 0.6× và 1.6×, tức thực tế nhận 18–96 giây trong khi màn hình ghi 30–60.
+# Một lượt 96 giây dài gấp rưỡi mức chuyên gia chuẩn bị tinh thần, và họ không có cách
+# nào biết. Siết lại còn 24–78 giây, và ghi ĐÚNG khoảng thật ra giao diện.
+#
+# Không siết tới đúng 30–60: ước lượng thời lượng tính từ số từ nên bản thân nó có sai
+# số, chặn quá chặt sẽ loại cả kịch bản tốt.
+TURN_TOLERANCE_LOW = 0.8
+TURN_TOLERANCE_HIGH = 1.3
+
+
+def turn_duration_bounds() -> tuple[int, int]:
+    """Khoảng thời lượng THẬT SỰ được chấp nhận, để giao diện khỏi nói một đằng."""
+    return (
+        round(settings.turn_min_sec * TURN_TOLERANCE_LOW),
+        round(settings.turn_max_sec * TURN_TOLERANCE_HIGH),
+    )
 
 
 def validate_script(
@@ -217,12 +268,12 @@ def validate_script(
     too_short = [
         i + 1
         for i, t in enumerate(turns)
-        if estimate_duration_sec(t.text, t.source_lang) < settings.turn_min_sec * 0.6
+        if estimate_duration_sec(t.text, t.source_lang) < settings.turn_min_sec * TURN_TOLERANCE_LOW
     ]
     too_long = [
         i + 1
         for i, t in enumerate(turns)
-        if estimate_duration_sec(t.text, t.source_lang) > settings.turn_max_sec * 1.6
+        if estimate_duration_sec(t.text, t.source_lang) > settings.turn_max_sec * TURN_TOLERANCE_HIGH
     ]
     if too_short:
         problems.append(f"lượt {too_short} quá ngắn so với mốc 30–60 giây")
@@ -258,11 +309,9 @@ def generate_script(
     *,
     client_name: str,
     partner_names: list[str],
-    mode: str = "consecutive",
     difficulty: str = "medium",
     n_turns: int = 8,
     hide_script: bool = True,
-    glossary_scope: str = "all",
     engagement_id: int | None = None,
 ) -> GeneratedScript:
     """Sinh kịch bản, kiểm, sinh lại một lần nếu chưa đạt, rồi lưu."""
@@ -350,8 +399,12 @@ def generate_script(
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'generated')
                 """,
                 (
-                    workspace_id, engagement_id, mode, difficulty, len(script.turns),
-                    int(hide_script), glossary_scope,
+                    # `mode` và `glossary_scope` giữ trong DB cho lịch sử đọc được, nhưng
+                    # KHÔNG còn là tham số: `build_script_prompt()` chưa bao giờ nhận chúng,
+                    # nên chúng chỉ đi từ chữ ký thẳng vào INSERT rồi thôi. Một API quảng cáo
+                    # khả năng nó không làm là cái bẫy cho người dùng API sau này.
+                    workspace_id, engagement_id, "consecutive", difficulty, len(script.turns),
+                    int(hide_script), "all",
                     script.model_dump_json(),
                     json.dumps(warnings, ensure_ascii=False),
                 ),
@@ -373,13 +426,16 @@ def generate_script(
             ]
             used_term_ids.update(term_ids)
 
-            # Kiểm lời khai "lấy nguyên văn từ tài liệu" thay vì tin ngay: chỉ công nhận
-            # mức ⭐⭐⭐ khi bản dịch thật sự trùng nhiều với bản tiếng Anh trong tài liệu.
+            # Kiểm lời khai "lấy nguyên văn từ tài liệu" thay vì tin ngay.
+            #
+            # Nhãn chỉ nói đúng thứ chứng minh được: câu này XUẤT HIỆN NGUYÊN VĂN trong
+            # tài liệu song ngữ. Nó KHÔNG chứng minh đây là bản dịch của đúng lượt nguồn
+            # đang xét — muốn khẳng định điều đó thì phải căn chỉnh nguồn↔đích thật sự,
+            # và đó là việc khác. Vì vậy giá trị là `verbatim_parallel`, không phải `human`.
             tier = "ai"
             if turn.verbatim_from_document and authentic_en:
-                overlap = _token_overlap(turn.reference_translation, authentic_en)
-                if overlap >= VERBATIM_MIN_OVERLAP:
-                    tier = "human"
+                if _is_verbatim_in(turn.reference_translation, authentic_en):
+                    tier = "verbatim_parallel"
 
             duration = estimate_duration_sec(turn.text, turn.source_lang)
 
@@ -412,11 +468,12 @@ def generate_script(
                 )
             )
 
-    n_human = sum(1 for t in turns if t.reference_tier == "human")
-    if n_human:
+    n_verbatim = sum(1 for t in turns if t.reference_tier == "verbatim_parallel")
+    if n_verbatim:
         warnings.append(
-            f"{n_human} lượt dùng bản dịch của người thật từ tài liệu buổi làm việc — "
-            "những lượt này chấm theo chuẩn đáng tin nhất."
+            f"{n_verbatim} lượt có bản tham chiếu tìm được NGUYÊN VĂN trong tài liệu song "
+            "ngữ của buổi làm việc — đáng tin hơn bản AI sinh, nhưng vẫn nên tự đối chiếu "
+            "xem nó có đúng là bản dịch của lượt đó không."
         )
 
     return GeneratedScript(

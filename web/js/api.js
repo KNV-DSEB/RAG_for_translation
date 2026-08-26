@@ -12,6 +12,30 @@
 
 const BASE = "";
 
+/**
+ * Hạn chờ theo từng loại việc, không dùng chung một con số.
+ *
+ * Trước đây mọi request đều chờ 900.000 ms (15 phút). Hậu quả: một request treo trông
+ * y hệt một request đang chạy, suốt mười lăm phút, rồi mới báo lỗi. Với người dùng thì
+ * đó là "công cụ bị đơ", không phải "công cụ đang bận".
+ */
+const TIMEOUTS = [
+  [/^\/research\/run/, 300000],        // tới 8 truy vấn + 5 lệnh gọi LLM
+  [/^\/simulate\/script/, 180000],     // sinh kịch bản, có thể sinh lại một lần
+  [/^\/simulate\/attempts\/\d+\/score/, 120000],
+  [/^\/documents\/(upload|ask)/, 120000],  // nạp tài liệu phải nhúng vector
+  [/^\/documents\/\d+\/reindex/, 120000],
+  [/^\/speech\/turn-audio/, 90000],
+];
+const DEFAULT_TIMEOUT = 60000;
+
+function timeoutFor(path) {
+  for (const [pattern, ms] of TIMEOUTS) {
+    if (pattern.test(path)) return ms;
+  }
+  return DEFAULT_TIMEOUT;
+}
+
 export class ApiError extends Error {
   constructor(message, status = null, body = null) {
     super(message);
@@ -22,10 +46,13 @@ export class ApiError extends Error {
 }
 
 export class ConsentRequired extends ApiError {
-  constructor(message, preview) {
+  constructor(message, preview, operationId) {
     super(message, 409);
     this.name = "ConsentRequired";
     this.preview = preview;
+    // Mã thao tác vừa bị chặn. Lần thử lại PHẢI mang nó theo, nếu không máy chủ đúc một
+    // thao tác mới và quyền vừa cấp thành vô dụng — chuyên gia bấm đồng ý xong vẫn bị hỏi lại.
+    this.operationId = operationId;
   }
 }
 
@@ -54,7 +81,8 @@ async function parse(response) {
   }
 }
 
-async function raw(method, path, { json, form, query, timeoutMs = 900000 } = {}) {
+async function raw(method, path, { json, form, query, headers, timeoutMs } = {}) {
+  timeoutMs = timeoutMs ?? timeoutFor(path);
   const url = new URL(BASE + path, window.location.origin);
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined && value !== null && value !== "") {
@@ -65,7 +93,7 @@ async function raw(method, path, { json, form, query, timeoutMs = 900000 } = {})
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  const init = { method, signal: controller.signal, headers: {} };
+  const init = { method, signal: controller.signal, headers: { ...(headers ?? {}) } };
   if (json !== undefined) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(json);
@@ -97,7 +125,8 @@ async function raw(method, path, { json, form, query, timeoutMs = 900000 } = {})
   if (response.status === 409 && body?.error === "consent_required") {
     throw new ConsentRequired(
       pickDetail(body, "Cần bạn đồng ý trước khi gửi dữ liệu ra ngoài."),
-      body.preview ?? {}
+      body.preview ?? {},
+      body.operation_id ?? body.preview?.operation_id
     );
   }
 
@@ -125,7 +154,13 @@ async function call(method, path, options = {}) {
           "Dữ liệu trên máy không thay đổi."
       );
     }
-    return raw(method, path, options);
+    // Chạy lại ĐÚNG yêu cầu vừa bị chặn, kèm mã thao tác. Thân request giống hệt từng
+    // byte — đó là điều máy chủ dựa vào để biết đây vẫn là lần thao tác đã được đồng ý,
+    // chứ không phải một lần khác mượn quyền cũ.
+    return raw(method, path, {
+      ...options,
+      headers: { ...(options.headers ?? {}), "X-Operation-Id": error.operationId ?? "" },
+    });
   }
 }
 
@@ -205,7 +240,8 @@ export const recordingsDeletePreview = (scope, targetId) =>
   get("/speech/recordings/delete-preview", { scope, target_id: targetId });
 export const deleteRecordings = (scope, targetId) =>
   del("/speech/recordings", { scope, target_id: targetId, confirm: true });
-export const clearTtsCache = () => del("/speech/tts-cache");
+export const clearTtsCache = (workspaceId) =>
+  del("/speech/tts-cache", { workspace_id: workspaceId });
 
 /* --- Vòng phản hồi --- */
 export const submitVerdict = (body) => post("/feedback/verdict", body);
@@ -220,6 +256,6 @@ export const resetCalibration = (workspaceId) =>
 export const egressLog = (workspaceId, limit = 300) =>
   get("/security/egress-log", { workspace_id: workspaceId, limit });
 export const consentStatus = (workspaceId) => get(`/security/consent/${workspaceId}`);
-export const grantConsent = (workspaceId, scope = "session") =>
-  post("/security/consent", { workspace_id: workspaceId, scope });
+export const grantConsent = (consentRequestId, scope = "operation") =>
+  post("/security/consent", { consent_request_id: consentRequestId, scope });
 export const revokeConsent = (workspaceId) => del(`/security/consent/${workspaceId}`);
