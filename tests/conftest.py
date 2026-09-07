@@ -13,6 +13,7 @@ Hai việc:
 
 from __future__ import annotations
 
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -25,6 +26,46 @@ def pytest_configure() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
             reconfigure(encoding="utf-8", errors="replace")
+
+
+# ============================== PostgreSQL thật ==============================
+#
+# Đặt `RAG_TEST_POSTGRES=1` thì TOÀN BỘ bộ test chạy trên PostgreSQL thật thay vì SQLite.
+#
+# Vì sao phải chạy được cả hai: lớp `backend/database/` chỉ đáng tin nếu chính những
+# invariant đang bảo vệ sản phẩm (consent, ngân sách, xoá hồ sơ, cách ly hồ sơ) cho cùng
+# kết quả trên cả hai cơ sở dữ liệu. Viết riêng vài test cho Postgres thì chỉ chứng minh
+# được mấy test đó, không chứng minh được phần còn lại không lệch.
+#
+# Máy chủ do `pgserver` cung cấp — PostgreSQL thật kèm pgvector, cài bằng pip, không cần
+# Docker cũng không cần quyền admin. Không phải mock: cùng một engine với bản chạy ở
+# Supabase, chỉ khác nơi đặt.
+
+_PG_SERVER = None
+
+
+def use_postgres() -> bool:
+    return os.getenv("RAG_TEST_POSTGRES", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _start_postgres(root: Path) -> str:
+    """Khởi động PostgreSQL nhúng, trả về chuỗi kết nối tới một schema sạch."""
+    global _PG_SERVER
+    import pgserver
+    import psycopg
+
+    pgdata = root / "pgdata"
+    pgdata.mkdir(parents=True, exist_ok=True)
+    _PG_SERVER = pgserver.get_server(str(pgdata))
+    uri = _PG_SERVER.get_uri()
+
+    # Mỗi phiên test bắt đầu từ schema trống. Dùng lại thư mục dữ liệu thì nhanh hơn
+    # nhiều so với initdb mỗi lần, nhưng phải dọn sạch để test không thấy dòng cũ.
+    with psycopg.connect(uri, autocommit=True) as conn:
+        conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
+        conn.execute("CREATE SCHEMA public")
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    return uri
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -52,6 +93,9 @@ def temp_data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
         if hasattr(settings, name):
             object.__setattr__(settings, name, value)
     settings.ensure_dirs()
+
+    if use_postgres():
+        object.__setattr__(settings, "database_url", _start_postgres(root))
 
     init_db()
     return root

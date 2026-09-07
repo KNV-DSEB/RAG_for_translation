@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from typing import Any, Iterator
 
 from backend.config import settings
+from backend.database import driver, introspect
+from backend.database.dialect import ddl_to_postgres
 
 # Mỗi phần tử là một câu CREATE. Chạy tuần tự, idempotent.
 _SCHEMA: tuple[str, ...] = (
@@ -354,20 +356,31 @@ _SCHEMA: tuple[str, ...] = (
 )
 
 
-def connect() -> sqlite3.Connection:
-    """Mở connection mới: bật foreign keys, WAL, và trả row dạng dict-like."""
-    settings.ensure_dirs()
-    conn = sqlite3.connect(settings.db_path, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    return conn
+def connect() -> Any:
+    """Mở connection mới. PostgreSQL nếu có `DATABASE_URL`, không thì SQLite trên máy.
+
+    Mã gọi KHÔNG cần biết đang chạy trên cái nào: cả hai đều nhận SQL viết theo phương
+    ngữ SQLite, trả hàng dùng được `row["ten"]`, và có `lastrowid` / `rowcount`.
+    """
+    if driver.is_postgres():
+        return driver.PostgresConnection(driver._get_pool().connection().__enter__())
+    return driver.connect_sqlite()
 
 
 @contextmanager
-def get_conn() -> Iterator[sqlite3.Connection]:
-    """Context manager: tự commit khi thoát êm, rollback khi có lỗi."""
-    conn = connect()
+def get_conn() -> Iterator[Any]:
+    """Context manager: tự commit khi thoát êm, rollback khi có lỗi.
+
+    Đây là CỬA DUY NHẤT xuống cơ sở dữ liệu — 95 chỗ trong mã gọi hàm này. Nhờ vậy việc
+    đổi từ SQLite sang PostgreSQL không phải sờ tới 159 lệnh `execute` nằm rải rác.
+    """
+    if driver.is_postgres():
+        pool = driver._get_pool()
+        with pool.connection() as raw:
+            yield driver.PostgresConnection(raw)
+        return
+
+    conn = driver.connect_sqlite()
     try:
         yield conn
         conn.commit()
@@ -403,9 +416,7 @@ def _ensure_columns(conn: sqlite3.Connection) -> list[str]:
     """Thêm các cột còn thiếu vào cơ sở dữ liệu đã tồn tại. Trả về danh sách cột vừa thêm."""
     added: list[str] = []
     for table, column, definition in _ADDED_COLUMNS:
-        existing = {
-            str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-        }
+        existing = introspect.table_columns(conn, table)
         if not existing:
             continue  # bảng chưa tồn tại, CREATE TABLE ở trên đã lo
         if column not in existing:
@@ -418,9 +429,7 @@ def _rename_columns(conn: sqlite3.Connection) -> list[str]:
     """Đổi tên cột trên cơ sở dữ liệu đã có. Chạy lại nhiều lần vẫn an toàn."""
     renamed: list[str] = []
     for table, old, new in _RENAMED_COLUMNS:
-        existing = {
-            str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-        }
+        existing = introspect.table_columns(conn, table)
         if not existing or new in existing or old not in existing:
             continue
         conn.execute(f"ALTER TABLE {table} RENAME COLUMN {old} TO {new}")
@@ -472,14 +481,14 @@ def init_db() -> list[str]:
     """Tạo toàn bộ bảng nếu chưa có. Trả về danh sách tên bảng hiện có để nghiệm thu."""
     with get_conn() as conn:
         for statement in _SCHEMA:
-            conn.execute(statement)
+            conn.execute(ddl_to_postgres(statement) if driver.is_postgres() else statement)
         _ensure_columns(conn)
         _rename_columns(conn)
         _migrate(conn)
-        rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        ).fetchall()
-    return [row["name"] for row in rows]
+        names = introspect.table_names(conn)
+    # Schema vừa đổi — bộ nhớ đệm "bảng nào có cột id" của driver đã cũ.
+    driver.reset_table_cache()
+    return names
 
 
 def query_all(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:

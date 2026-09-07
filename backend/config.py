@@ -146,10 +146,54 @@ class Settings:
         default_factory=lambda: _env_int("MAX_VERDICTS_IN_PROMPT", 12)
     )
 
+    # ----- Cloud -----
+    # Có `DATABASE_URL` thì chạy PostgreSQL, không có thì SQLite trên máy. Không có cờ
+    # "chế độ cloud" riêng: một cờ có thể lệch với thực tế, sự hiện diện của chuỗi kết
+    # nối thì không.
+    database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", "").strip())
+
+    supabase_url: str = field(default_factory=lambda: os.getenv("SUPABASE_URL", "").strip())
+    supabase_service_key: str = field(
+        default_factory=lambda: os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    )
+    supabase_jwt_issuer: str = field(
+        default_factory=lambda: os.getenv("SUPABASE_JWT_ISSUER", "").strip()
+    )
+    supabase_jwt_audience: str = field(
+        default_factory=lambda: os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated").strip()
+    )
+    supabase_bucket: str = field(
+        default_factory=lambda: os.getenv("SUPABASE_BUCKET", "documents").strip()
+    )
+
+    # Giai đoạn thử nghiệm: chỉ những email trong danh sách này được dùng. Đây là CHÍNH
+    # SÁCH XÁC THỰC, không phải mô hình dữ liệu — bỏ biến này đi là mở SaaS được ngay mà
+    # không phải đổi quyền sở hữu ở bất kỳ đâu.
+    allowed_user_emails: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            e.strip().lower()
+            for e in os.getenv("ALLOWED_USER_EMAILS", "").split(",")
+            if e.strip()
+        )
+    )
+
+    frontend_origins: tuple[str, ...] = field(
+        default_factory=lambda: tuple(
+            o.strip().rstrip("/")
+            for o in os.getenv("FRONTEND_ORIGINS", "").split(",")
+            if o.strip()
+        )
+    )
+
     # ----- Hạ tầng -----
     backend_host: str = field(default_factory=lambda: os.getenv("BACKEND_HOST", "127.0.0.1"))
     backend_port: int = field(default_factory=lambda: _env_int("BACKEND_PORT", 8000))
     debug: bool = field(default_factory=lambda: _env_bool("DEBUG", False))
+
+    @property
+    def is_cloud(self) -> bool:
+        """Đang chạy trên hạ tầng cloud hay trên máy cá nhân."""
+        return bool(self.database_url)
 
     @property
     def has_gemini_key(self) -> bool:
