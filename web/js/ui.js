@@ -228,7 +228,12 @@ export function consentDialog(preview) {
     const payloadBlock = preview.payload_known
       ? [
           el("p", null,
-            "Toàn bộ nội dung sẽ rời khỏi máy này — ",
+            // Câu này do MÁY CHỦ cấp: trên cloud tài liệu đã nằm ở kho riêng từ trước,
+            // nên "rời khỏi máy này" là sai và sai theo chiều nguy hiểm nhất.
+            // Dự phòng phải ĐÚNG ở cả hai chế độ. Đặt câu của bản local làm mặc định thì
+            // khi máy chủ không cấp nhãn, giao diện sẽ nói dối trên cloud — và nói dối
+            // đúng theo chiều nguy hiểm nhất.
+            (preview.payload_origin_label ?? "Toàn bộ nội dung sẽ được gửi đi") + " — ",
             el("b", { text: `${fmtNum(preview.n_chars)} ký tự` }),
             ":"),
           el("pre.payload", { text: preview.payload_excerpt ?? "" }),

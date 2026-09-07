@@ -208,6 +208,21 @@ class OperationPreview:
     n_chars: int
 
     @property
+    def origin_phrase(self) -> str:
+        """Dữ liệu đi TỪ ĐÂU sang bên thứ ba — sinh từ nơi dữ liệu thật sự đang nằm.
+
+        Bản local: tài liệu ở trên máy chuyên gia, nên "ra ngoài" nghĩa là rời khỏi máy đó.
+        Bản cloud: tài liệu ĐÃ nằm ở kho riêng của ứng dụng từ lúc tải lên. Giữ nguyên câu
+        "rời khỏi máy này" là nói dối theo chiều nguy hiểm nhất — chuyên gia tin rằng tài
+        liệu khách hàng vẫn trong tầm tay mình, trong khi nó đã ở một máy chủ khác.
+        """
+        from backend.storage import is_cloud_storage
+
+        if is_cloud_storage() or _driver.is_postgres():
+            return "từ kho riêng của ứng dụng sang dịch vụ bên thứ ba"
+        return "ra ngoài"
+
+    @property
     def session_scope_label(self) -> str:
         """Nhãn cho nút phạm vi rộng hơn — SINH RA TỪ chế độ đang chạy, không viết tay.
 
@@ -263,7 +278,10 @@ class OperationPreview:
                     f"bận hoặc hết hạn mức, nên trần kỹ thuật là {d.max_calls} lượt)"
                 )
             parts.append(piece)
-        note = "Thao tác này sẽ gửi dữ liệu ra ngoài: " + ", ".join(parts) + "."
+        # Dữ liệu đi TỪ ĐÂU. Trên bản local thì "từ máy này"; trên cloud thì tài liệu đã
+        # nằm ở kho riêng của ứng dụng từ trước, và nói "rời khỏi máy này" là sai — chuyên
+        # gia sẽ tưởng tệp vẫn trong tầm tay mình. Câu này sinh từ chế độ đang chạy.
+        note = f"Thao tác này sẽ gửi dữ liệu {self.origin_phrase}: " + ", ".join(parts) + "."
         if not self.payload_known:
             note += (
                 " Nội dung từng lần do các bước bên trong sinh ra nên chưa hiện được ở đây — "
@@ -283,6 +301,11 @@ class OperationPreview:
             # Câu chữ cho nút phạm vi rộng do MÁY CHỦ cấp. Giao diện tự viết thì nó sẽ
             # lệch khỏi thứ backend thật sự thực thi, và lệch theo chiều hứa nhiều hơn.
             "session_scope_label": self.session_scope_label,
+            "payload_origin_label": (
+                "Toàn bộ nội dung sẽ được gửi đi"
+                if self.origin_phrase != "ra ngoài"
+                else "Toàn bộ nội dung sẽ rời khỏi máy này"
+            ),
             "session_scope_note": self.session_scope_note,
             "payload_excerpt": self.payload_excerpt,
             "payload_known": self.payload_known,

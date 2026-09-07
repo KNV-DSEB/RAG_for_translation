@@ -130,3 +130,17 @@ def consent_status(workspace_id: int) -> dict[str, object]:
         "is_confidential": gateway.is_confidential(workspace_id),
         **state,
     }
+
+
+@router.get("/data-map")
+def get_data_map() -> dict[str, Any]:
+    """Từng loại dữ liệu THẬT SỰ nằm ở đâu — sinh từ cấu hình đang chạy, không viết tay.
+
+    Màn Bảo mật từng có một câu viết cứng nói rằng cơ sở dữ liệu, vector và "nhận dạng
+    giọng nói" đều chạy trên máy này. Câu đó sai ba lần: nhận dạng giọng nói đã bị gỡ
+    khỏi dự án, còn trên cloud thì cơ sở dữ liệu lẫn vector đều ở Supabase. Một câu viết
+    tay không tự đúng lên được khi kiến trúc đổi.
+    """
+    from backend.security import datamap
+
+    return {"headline": datamap.headline(), "rows": datamap.data_map()}

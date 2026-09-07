@@ -69,6 +69,9 @@ class EgressPreviewOut(BaseModel):
     declares: list[dict[str, object]]
     scope_note: str
     session_scope_label: str = "Cho tới khi đóng ứng dụng"
+    # Mặc định phải ĐÚNG ở cả hai chế độ. Câu của bản local làm mặc định thì khi
+    # gateway không cấp nhãn, phản hồi sẽ nói dối trên cloud.
+    payload_origin_label: str = "Toàn bộ nội dung sẽ được gửi đi"
     session_scope_note: str = ""
     payload_excerpt: str
     # False = thao tác nhiều lệnh gọi, nội dung do các bước bên trong sinh ra nên chưa

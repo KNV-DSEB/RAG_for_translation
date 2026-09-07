@@ -1,5 +1,5 @@
 /**
- * Màn hình: Bảo mật (§7) — kiểm chứng dữ liệu nào đã rời khỏi máy này.
+ * Màn hình: Bảo mật (§7) — dữ liệu đang nằm ở đâu, và đã đi những đâu.
  *
  * Vào:  hồ sơ khách hàng đang chọn (hoặc xem toàn bộ).
  * Ra:   nhật ký egress, trạng thái vé đồng ý, bật/tắt cờ hồ sơ mật.
@@ -32,7 +32,7 @@ const DEST_LABEL = { llm: "LLM", search: "Tìm kiếm", tts: "Lời thoại" };
 function statusBadge(row) {
   const status = String(row.status ?? "");
   if (status === "blocked") {
-    return el("span.badge.badge-mute", { text: "bị chặn", title: "Chưa có gì rời khỏi máy." });
+    return el("span.badge.badge-mute", { text: "bị chặn", title: "Chưa có gì được gửi đi." });
   }
   if (status === "attempt_failed") {
     return el("span.badge.badge-flag", {
@@ -52,25 +52,57 @@ export async function render(root) {
   const current = store.currentWorkspace();
 
   root.append(
-    pageHead("HỆ THỐNG", "Bảo mật", "Kiểm chứng chính xác dữ liệu nào đã rời khỏi máy này"),
-    el(
-      "div.card",
-      null,
-      el("div.card-title", { text: "Toàn hệ thống có đúng ba đường dữ liệu ra ngoài" }),
-      el(
-        "div.card-sub",
-        null,
-        el("div", null, el("b", { text: "E1 — Gọi LLM: " }),
-          "chỉ gửi các đoạn ngữ cảnh đã truy hồi, không bao giờ gửi cả tài liệu."),
-        el("div", null, el("b", { text: "E2 — Truy vấn tìm kiếm: " }),
-          "chuỗi truy vấn, có chứa tên khách hàng và chủ đề."),
-        el("div", null, el("b", { text: "E3 — Đọc lời thoại: " }),
-          "văn bản lời thoại gửi tới edge-tts. Lần nghe lại lấy từ cache thì không gọi mạng."),
-        el("div", { style: "margin-top:8px" },
-          "Nhúng embedding, vector DB, nhận dạng giọng nói và cơ sở dữ liệu đều chạy trên máy này.")
-      )
-    )
+    pageHead("HỆ THỐNG", "Bảo mật", "Dữ liệu của bạn đang nằm ở đâu, và đã đi những đâu")
   );
+
+  // Bản đồ dữ liệu do MÁY CHỦ sinh ra từ cấu hình đang chạy.
+  //
+  // Chỗ này trước đây là một đoạn viết cứng nói rằng cơ sở dữ liệu, vector và "nhận dạng
+  // giọng nói" đều chạy trên máy này. Câu đó sai ba lần: nhận dạng giọng nói đã bị gỡ
+  // khỏi dự án từ lâu, còn trên cloud thì cả cơ sở dữ liệu lẫn vector đều ở Supabase.
+  // Một câu viết tay không tự đúng lên được khi kiến trúc đổi — nên nó phải đến từ nơi
+  // quyết định dữ liệu nằm ở đâu.
+  const BOUNDARY = {
+    device: ["badge-ok", "trên máy"],
+    app_cloud: ["badge-warn", "kho của ứng dụng"],
+    third_party: ["badge-flag", "bên thứ ba"],
+  };
+
+  try {
+    const map = await api.dataMap();
+    root.append(
+      el(
+        "div.card",
+        null,
+        el("div.card-title", { text: "Dữ liệu nằm ở đâu" }),
+        el("div.card-sub", { style: "margin-bottom:12px", text: map.headline }),
+        el(
+          "div",
+          { style: "display:flex;flex-direction:column;gap:8px" },
+          (map.rows ?? []).map((r) => {
+            const [cls, label] = BOUNDARY[r.boundary] ?? BOUNDARY.third_party;
+            return el(
+              "div",
+              { style: "display:flex;gap:10px;align-items:baseline;flex-wrap:wrap" },
+              el(`span.badge.${cls}`, { text: label }),
+              el("b", { style: "min-width:150px", text: r.what }),
+              el("span", { style: "font-size:var(--t-sm)", text: r.where }),
+              el("span", {
+                style: "font-size:var(--t-xs);color:var(--ink-3);flex:1",
+                text: r.detail,
+              })
+            );
+          })
+        )
+      )
+    );
+  } catch {
+    // Không lấy được bản đồ thì KHÔNG hiện gì cả. Hiện một câu mặc định viết cứng ở đây
+    // là quay lại đúng cái lỗi vừa sửa.
+    root.append(
+      note("warn", "Chưa đọc được bản đồ dữ liệu từ máy chủ — thử tải lại trang.")
+    );
+  }
 
   const slot = el("div");
   root.append(slot);
@@ -241,7 +273,7 @@ export async function render(root) {
 
     if (!rows.length) {
       slot.append(
-        el("div", { style: "margin-top:16px" }, note("ok", "Chưa có lần nào dữ liệu rời khỏi máy này."))
+        el("div", { style: "margin-top:16px" }, note("ok", "Chưa có lần nào dữ liệu được gửi sang dịch vụ bên thứ ba."))
       );
       return;
     }

@@ -250,3 +250,81 @@ def delete_document_object(document_id: int) -> dict[str, Any]:
             ("deleted" if removed else "delete_failed", document_id),
         )
     return {"deleted": removed, "key": key}
+
+
+# ============================== Lớp A: báo trước khi tải lên ==============================
+
+
+def upload_notice(workspace_id: int, filename: str, size_bytes: int) -> dict[str, Any]:
+    """Nói trước cho chuyên gia biết tệp sẽ đi đâu — TRƯỚC khi nó rời thiết bị.
+
+    Đây là RANH GIỚI TIN CẬY MỚI mà bản chạy trên máy không có. Trên máy cá nhân, "tải
+    tệp lên" nghĩa là chép từ thư mục này sang thư mục khác trên cùng cái máy đó. Trên
+    web, nó nghĩa là tệp rời khỏi thiết bị của chuyên gia và sang một máy chủ ở nơi khác.
+    Hai việc hoàn toàn khác nhau mang cùng một cái tên.
+
+    Vì sao TÁCH khỏi hộp thoại đồng ý gửi ra bên thứ ba
+    ---------------------------------------------------
+    Hai câu hỏi khác nhau, và trả lời gộp là trả lời sai cả hai:
+
+      Lớp A (đây)  "Tệp này có rời khỏi thiết bị của tôi sang kho của ứng dụng không?"
+      Lớp B (gateway) "Dữ liệu có sang Gemini / DuckDuckGo / Microsoft / Google không?"
+
+    Gộp lại thì mỗi lần lưu một tệp lại hiện hộp thoại "gửi dữ liệu ra ngoài" — và chuyên
+    gia sẽ quen tay bấm đồng ý, đúng lúc mà hộp thoại thật sự quan trọng xuất hiện.
+
+    Câu chữ ở đây SINH RA từ kho đang chạy, không viết cứng: bản local nói "vẫn nằm trên
+    máy này", bản cloud nói thẳng là tệp rời khỏi thiết bị. Viết cứng thì một trong hai
+    trường hợp sẽ là nói dối, mà ta không biết là trường hợp nào.
+    """
+    from backend.storage import is_cloud_storage
+
+    ext = _validate(filename, size_bytes)
+
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT name, is_confidential FROM workspaces WHERE id = ?", (workspace_id,)
+        ).fetchone()
+    workspace_name = str(row["name"]) if row else f"#{workspace_id}"
+    confidential = bool(row["is_confidential"]) if row else False
+
+    cloud = is_cloud_storage()
+    if cloud:
+        destination = f"kho riêng trên Supabase (bucket `{settings.supabase_bucket}`)"
+        leaves_device = True
+        headline = (
+            f"Tệp này sẽ rời khỏi thiết bị của bạn và được lưu vào {destination}. "
+            "Kho không công khai — chỉ tài khoản của bạn đọc được."
+        )
+        after = (
+            "Sau bước này, tài liệu KHÔNG còn chỉ nằm trên máy bạn. Việc gửi nội dung "
+            "sang Gemini, DuckDuckGo hay dịch vụ đọc lời thoại vẫn là chuyện riêng, và "
+            "vẫn phải xin phép từng thao tác."
+        )
+    else:
+        destination = "thư mục dữ liệu trên máy này"
+        leaves_device = False
+        headline = f"Tệp này sẽ được chép vào {destination}. Nó không rời khỏi máy."
+        after = (
+            "Việc gửi nội dung sang Gemini, DuckDuckGo hay dịch vụ đọc lời thoại là "
+            "chuyện riêng, và vẫn phải xin phép từng thao tác."
+        )
+
+    return {
+        "workspace_id": workspace_id,
+        "workspace_name": workspace_name,
+        "is_confidential": confidential,
+        "filename": filename,
+        "ext": ext,
+        "size_bytes": size_bytes,
+        "destination": destination,
+        # Cờ này là thứ giao diện dùng để quyết định có phải hỏi hay chỉ cần báo. Nó do
+        # MÁY CHỦ đặt theo kho đang chạy, không phải giao diện tự đoán.
+        "leaves_device": leaves_device,
+        "requires_acknowledgement": leaves_device,
+        "headline": headline,
+        "after_note": after,
+        # Nói rõ đây KHÔNG phải bên thứ ba, để không ai đọc nhầm thành "đã gửi cho Google".
+        "boundary": "app_cloud" if cloud else "device",
+        "third_party_involved": False,
+    }

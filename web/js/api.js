@@ -253,6 +253,33 @@ export const resetCalibration = (workspaceId) =>
   post("/feedback/reset-calibration", undefined, { workspace_id: workspaceId, confirm: true });
 
 /* --- Bảo mật --- */
+// Bản đồ dữ liệu: từng loại dữ liệu nằm ở đâu. MÁY CHỦ sinh từ cấu hình đang chạy,
+// giao diện chỉ hiển thị lại — xem `backend/security/datamap.py`.
+export const dataMap = () => get("/security/data-map");
+
+// Lớp A: báo trước tệp sẽ đi đâu, TRƯỚC khi nó rời thiết bị. Tách hẳn khỏi hộp thoại
+// đồng ý gửi bên thứ ba (lớp B) — hai câu hỏi khác nhau, gộp lại là trả lời sai cả hai.
+export const uploadNotice = (workspaceId, filename, sizeBytes) =>
+  post("/documents/upload-notice", {
+    workspace_id: workspaceId,
+    filename,
+    size_bytes: sizeBytes,
+  });
+
+export const uploadIntent = (workspaceId, filename, sizeBytes) =>
+  post("/documents/upload-intent", {
+    workspace_id: workspaceId,
+    filename,
+    size_bytes: sizeBytes,
+  });
+
+export const finalizeUpload = (documentId) =>
+  post(`/documents/${documentId}/finalize`, {});
+
+export const storageEvents = (workspaceId, limit = 100) =>
+  get(`/documents/storage-events?workspace_id=${workspaceId}&limit=${limit}`);
+
+
 export const egressLog = (workspaceId, limit = 300) =>
   get("/security/egress-log", { workspace_id: workspaceId, limit });
 export const consentStatus = (workspaceId) => get(`/security/consent/${workspaceId}`);

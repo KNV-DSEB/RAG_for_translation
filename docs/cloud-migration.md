@@ -438,3 +438,78 @@ hệ thống không báo là đã xoá.
   liệu mô tả.
 - Trạng thái đúng: *luồng tải lên đã kiểm chứng trên kho local; tích hợp Supabase Storage
   còn chờ credential.*
+
+---
+
+## 11. Phase 8 — đồng ý tải lên: hai lớp, không gộp
+
+### 11.1 Ranh giới tin cậy mới
+
+Trên máy cá nhân, "tải tệp lên" là chép từ thư mục này sang thư mục khác **trên cùng cái
+máy đó**. Trên web, nó là tệp **rời khỏi thiết bị** của chuyên gia sang một máy chủ ở nơi
+khác. Hai việc hoàn toàn khác nhau mang cùng một cái tên.
+
+| | Câu hỏi | Ai trả lời |
+|---|---|---|
+| **Lớp A** | "Tệp có rời khỏi thiết bị của tôi sang kho của ứng dụng không?" | `storage/service.upload_notice` |
+| **Lớp B** | "Dữ liệu có sang Gemini / DuckDuckGo / Microsoft / Google không?" | `security/gateway` |
+
+Gộp lại thì mỗi lần chọn tệp lại hiện hộp thoại "gửi dữ liệu ra ngoài" — và chuyên gia sẽ
+**quen tay bấm đồng ý**, đúng lúc hộp thoại thật sự quan trọng xuất hiện. `UP2` khoá lại:
+xem thông báo tải lên phải chạm **0** dòng của `egress_log`, `pending_consents`,
+`operations`, `consent_grants`.
+
+### 11.2 Ba khẳng định sai đã gỡ
+
+Màn Bảo mật có một panel viết cứng. Nó mắc **ba lỗi cùng lúc**:
+
+| Câu | Sai vì |
+|---|---|
+| "nhận dạng giọng nói … chạy trên máy này" | STT **đã bị gỡ khỏi dự án từ lâu** — sai ngay cả trên bản local |
+| "cơ sở dữ liệu … chạy trên máy này" | trên cloud nó ở Supabase |
+| "Toàn hệ thống có đúng ba đường dữ liệu ra ngoài" | trên cloud còn kết nối PostgreSQL và kho lưu trữ |
+
+Thay bằng `backend/security/datamap.py` — **sinh từ cấu hình quyết định nơi dữ liệu nằm**.
+Một câu viết tay không tự đúng lên được khi kiến trúc đổi.
+
+Ba mức `boundary`, và chúng khác nhau:
+
+```
+device       trên chính máy đang chạy tiến trình
+app_cloud    hạ tầng của ứng dụng — ĐÃ rời thiết bị, CHƯA sang bên thứ ba
+third_party  gửi sang tổ chức khác
+```
+
+Gộp `app_cloud` vào `device` là nói dối chuyên gia. Gộp nó vào `third_party` là làm nhật
+ký gửi-ra-ngoài mất tác dụng. **Ba mức, không phải hai.**
+
+### 11.3 Câu chữ lớp B nói rõ dữ liệu đi TỪ ĐÂU
+
+```
+local  "Thao tác này sẽ gửi dữ liệu ra ngoài: …"
+cloud  "Thao tác này sẽ gửi dữ liệu từ kho riêng của ứng dụng sang dịch vụ bên thứ ba: …"
+```
+
+Trên cloud, giữ nguyên "rời khỏi máy này" là nói dối **theo chiều nguy hiểm nhất**:
+chuyên gia tin rằng tài liệu khách hàng vẫn trong tầm tay mình, trong khi nó đã ở một máy
+chủ khác từ lúc tải lên.
+
+### 11.4 `UP6` — quét chuỗi viết cứng trong nguồn
+
+Quét **nguồn JS**, không quét kết quả render: một chuỗi viết cứng vẫn nằm im trong mã cho
+tới đúng lúc nó được hiện ra, và lúc đó thì đã muộn. Ba cụm bị cấm trong chuỗi hiển thị:
+`rời khỏi máy này` · `đều chạy trên máy này` · `có đúng ba đường dữ liệu ra ngoài`.
+
+Chú thích được miễn — chú thích giải thích *lịch sử* của mấy câu này thì phải nhắc lại chúng.
+
+`UP6` bắt được một tàn dư thật khi mới viết: `ui.js` vẫn giữ câu của bản local làm giá trị
+dự phòng `??`. Đặt câu local làm mặc định nghĩa là khi máy chủ không cấp nhãn, giao diện
+sẽ nói dối trên cloud. Cùng lỗi đó có ở `schemas.py`; đã sửa cả hai thành câu trung tính.
+
+### 11.5 Một lỗ hổng trong chính bộ test, do phép thử phá hoại tìm ra
+
+Bản đầu của `UP4` chỉ kiểm dòng *Tệp tài liệu*. Ép dòng *Cơ sở dữ liệu* luôn báo `device`
+thì test **vẫn xanh** — dòng tệp tài liệu che mất. Mà đúng dòng "Cơ sở dữ liệu" mới là
+khẳng định từng sai trên cloud.
+
+Nay `UP4` kiểm cả `Cơ sở dữ liệu` lẫn `Chỉ mục ngữ nghĩa`, theo `driver.is_postgres()`.

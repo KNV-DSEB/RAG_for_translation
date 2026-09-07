@@ -349,3 +349,27 @@ def storage_events(
             (workspace_id, limit),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+@router.post("/upload-notice")
+def get_upload_notice(payload: dict[str, Any]) -> dict[str, Any]:
+    """Lớp A: nói trước tệp sẽ đi đâu, TRƯỚC khi nó rời thiết bị.
+
+    Tách hẳn khỏi hộp thoại đồng ý gửi bên thứ ba. Hai câu hỏi khác nhau:
+      lớp A  "tệp có rời khỏi thiết bị của tôi sang kho của ứng dụng không?"
+      lớp B  "dữ liệu có sang Gemini / DuckDuckGo / Microsoft / Google không?"
+    Gộp lại thì mỗi lần lưu tệp lại hiện hộp thoại gửi-ra-ngoài, và chuyên gia quen tay
+    bấm đồng ý đúng lúc hộp thoại thật sự quan trọng xuất hiện.
+    """
+    workspace_id = int(payload.get("workspace_id") or 0)
+    _require_workspace(workspace_id)
+
+    filename = str(payload.get("filename") or "").strip()
+    size_bytes = int(payload.get("size_bytes") or 0)
+    if not filename:
+        raise HTTPException(status_code=400, detail="Thiếu tên tệp.")
+
+    try:
+        return storage_service.upload_notice(workspace_id, filename, size_bytes)
+    except storage_service.UploadRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
