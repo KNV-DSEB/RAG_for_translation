@@ -161,3 +161,52 @@ Phải tách hai lớp, không được gộp:
 
 Nhật ký `egress_log` giữ nguyên nghĩa cũ: **cố gửi sang bên thứ ba**. Không biến nó
 thành nhật ký tải tệp.
+
+---
+
+## 6. Parity Chroma → pgvector: ĐO, không suy
+
+Ngưỡng `WEAK_CONTEXT_DISTANCE = 0.75` được giữ nguyên, và dưới đây là lý do có bằng chứng
+chứ không phải lý do có vẻ hợp lý.
+
+### 6.1 Vì sao cùng thang đo
+
+`sentence-transformers` được gọi với `normalize_embeddings=True`. Đo lại: L2 norm =
+**1.000000**. Với vector đơn vị:
+
+- Chroma (`hnsw:space = cosine`) trả `1 − cos_sim`
+- pgvector (toán tử `<=>`) cũng trả `1 − cos_sim`
+
+Nhưng cùng công thức vẫn lệch được — float32 của pgvector so với float64 của Python, thứ
+tự khi hai khoảng cách bằng nhau, hoặc một chỉ mục xấp xỉ đổi tập ứng viên. Nên phải đo.
+
+### 6.2 Kết quả đo trên PostgreSQL thật
+
+| Truy vấn | Xếp hạng so với cosine tính tay | Khoảng cách gần nhất |
+|---|---|---:|
+| "Tổng giá trị tài trợ của dự án là bao nhiêu đồng?" | **khớp** | 0.2258 |
+| "Bao nhiêu hộ dân được hỗ trợ?" | **khớp** | 0.5681 |
+| "Công thức nấu phở bò Hà Nội?" (lạc đề) | **khớp** | 0.7973 |
+
+- chiều vector: **384** (đo, không lấy từ tài liệu)
+- lệch khoảng cách lớn nhất: **4.446e-08** — đúng mức sai số float32
+- ngưỡng 0.75 **tách đúng**: hai câu đúng chủ đề nằm dưới, câu lạc đề nằm trên
+
+**Kết luận: không đổi ngưỡng.** Không phải vì công thức giống nhau, mà vì đo trên thang
+của pgvector nó vẫn phân loại đúng.
+
+### 6.3 Chỉ mục: cố ý CHƯA thêm
+
+Chưa tạo HNSW/IVFFlat. Chỉ mục xấp xỉ đổi tập ứng viên, tức đổi kết quả truy hồi — thêm
+nó mà không đo lại parity là phá đúng thứ mục này vừa chứng minh. Với khối lượng hiện tại
+(73 vector, một chuyên gia) quét tuần tự vừa đủ nhanh vừa **chính xác**.
+
+Chỉ mục duy nhất đang có là B-tree trên `workspace_id`, để lọc hồ sơ trước khi xếp hạng.
+Nó không đổi kết quả.
+
+### 6.4 Vector nằm ngay trên `document_chunks`
+
+Chroma là kho tách rời, nên xoá tài liệu phải nhớ xoá ở hai nơi. Đặt cột `embedding` ngay
+trên `document_chunks` thì `ON DELETE CASCADE` lo phần đó: không có cửa sổ nào vector còn
+sống sau khi văn bản đã chết. `test_c13e` kiểm bằng cách xoá **tài liệu** rồi khẳng định
+vector biến mất — không gọi hàm xoá vector nào cả.

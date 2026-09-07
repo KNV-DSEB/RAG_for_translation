@@ -486,6 +486,14 @@ def init_db() -> list[str]:
         _rename_columns(conn)
         _migrate(conn)
         names = introspect.table_names(conn)
+
+    if driver.is_postgres():
+        # Cột vector chỉ tồn tại trên PostgreSQL. Đặt sau vòng CREATE ở trên vì nó là
+        # `ALTER TABLE` trên bảng vừa tạo.
+        from backend.rag import pgvector_store
+
+        pgvector_store.ensure_schema()
+
     # Schema vừa đổi — bộ nhớ đệm "bảng nào có cột id" của driver đã cũ.
     driver.reset_table_cache()
     return names

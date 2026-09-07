@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from backend.config import settings
+from backend.database import driver
+from backend.rag import pgvector_store
 
 COLLECTION_NAME = "documents"
 
@@ -97,6 +99,11 @@ def add_chunks(
         return 0
 
     embeddings = embed_texts(texts)
+
+    if driver.is_postgres():
+        # Trên cloud, vector nằm ngay trên dòng chunk nên `ON DELETE CASCADE` dọn giúp.
+        return pgvector_store.upsert(chunk_ids, embeddings, settings.embedding_model)
+
     get_collection().upsert(
         ids=[str(cid) for cid in chunk_ids],
         embeddings=embeddings,
@@ -167,35 +174,58 @@ def search(
     # Lấy dư rồi mới chia lượt — cần đủ ứng viên của từng tài liệu để chọn.
     pool_size = max(k * 4, 24)
 
-    result = get_collection().query(
-        query_embeddings=embed_texts([query]),
-        n_results=pool_size,
-        where=where,
-        include=["metadatas", "distances"],
-    )
-
-    metadatas = (result.get("metadatas") or [[]])[0]
-    distances = (result.get("distances") or [[]])[0]
-
-    candidates: list[SearchHit] = [
-        SearchHit(
-            chunk_id=int(meta["chunk_id"]),
-            document_id=int(meta["document_id"]),
-            distance=float(distance),
+    # Chỉ phần LẤY ỨNG VIÊN là khác nhau giữa hai kho vector. Phần chia lượt theo tài
+    # liệu là quyết định về chất lượng truy hồi, phải giống hệt nhau ở cả hai — nên nó
+    # nằm ngoài nhánh rẽ, dùng chung một bản.
+    if driver.is_postgres():
+        rows = pgvector_store.query(
+            workspace_id=workspace_id,
+            query_vector=embed_texts([query])[0],
+            pool_size=pool_size,
+            document_ids=document_ids,
         )
-        for meta, distance in zip(metadatas, distances)
-    ]
+        candidates = [
+            SearchHit(
+                chunk_id=int(r["chunk_id"]),
+                document_id=int(r["document_id"]),
+                distance=float(r["distance"]),
+            )
+            for r in rows
+        ]
+    else:
+        result = get_collection().query(
+            query_embeddings=embed_texts([query]),
+            n_results=pool_size,
+            where=where,
+            include=["metadatas", "distances"],
+        )
+        metadatas = (result.get("metadatas") or [[]])[0]
+        distances = (result.get("distances") or [[]])[0]
+        candidates = [
+            SearchHit(
+                chunk_id=int(meta["chunk_id"]),
+                document_id=int(meta["document_id"]),
+                distance=float(distance),
+            )
+            for meta, distance in zip(metadatas, distances)
+        ]
 
     return _round_robin_by_document(candidates, k)
 
 
 def delete_document(document_id: int) -> None:
     """Xoá toàn bộ vector của một tài liệu (spec A1.8: xoá rồi thì không còn xuất hiện)."""
+    if driver.is_postgres():
+        pgvector_store.delete_document(document_id)
+        return
     get_collection().delete(where={"document_id": document_id})
 
 
 def delete_workspace(workspace_id: int) -> None:
     """Xoá toàn bộ vector của một hồ sơ khách hàng (spec A7.6)."""
+    if driver.is_postgres():
+        pgvector_store.delete_workspace(workspace_id)
+        return
     get_collection().delete(where={"workspace_id": workspace_id})
 
 
