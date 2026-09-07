@@ -232,7 +232,19 @@ def test_c14b_danh_sach_duong_cong_khai_bi_khoa():
     assert PUBLIC_EXACT == frozenset(
         {"/health", "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc", "/favicon.ico"}
     ), "danh sach duong cong khai da doi — neu co y thi sua ca test nay kem ly do"
-    assert PUBLIC_PREFIXES == ("/static/", "/js/", "/css/")
+    # `/storage/upload/` và `/storage/download/` được thêm CÓ CHỦ ĐÍCH ở Phase 7.
+    # Chúng là bản tương đương của URL ký sẵn Supabase phát ra: trình duyệt gửi tệp tới
+    # đó mà không kèm JWT. Thứ cấp quyền là GIẤY PHÉP — token ngẫu nhiên 32 byte, dùng
+    # một lần, hết hạn 15 phút, khoá đích khoá cứng trong giấy phép từ lúc phát. Cầm
+    # token chỉ ghi được ĐÚNG MỘT tệp vào ĐÚNG MỘT chỗ đã định.
+    assert PUBLIC_PREFIXES == (
+        "/static/", "/js/", "/css/", "/storage/upload/", "/storage/download/",
+    ), "danh sách tiền tố công khai đã đổi — nếu cố ý thì sửa cả test này kèm lý do"
+
+    # Đường xin giấy phép và đường chốt thì KHÔNG được công khai: chúng tạo dòng dữ liệu
+    # và đọc dữ liệu hồ sơ, nên phải qua xác thực đầy đủ.
+    for path in ("/documents/upload-intent", "/documents/12/finalize", "/storage"):
+        assert not is_public(path), f"{path} bị coi là công khai"
     assert PUBLIC_SUFFIXES == (".html",)
 
     for path in ("/workspaces", "/documents/ask", "/security/egress-log", "/simulate/context"):

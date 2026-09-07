@@ -32,6 +32,7 @@ from backend.routes import feedback as feedback_routes
 from backend.routes import glossary as glossary_routes
 from backend.routes import research as research_routes
 from backend.routes import security as security_routes
+from backend.routes import storage as storage_routes
 from backend.routes import simulate as simulate_routes
 from backend.routes import speech as speech_routes
 from backend.routes import workspaces as workspace_routes
@@ -188,6 +189,7 @@ app.include_router(simulate_routes.router, dependencies=[Depends(workspace_guard
 app.include_router(speech_routes.router, dependencies=[Depends(workspace_guard)])
 app.include_router(feedback_routes.router, dependencies=[Depends(workspace_guard)])
 app.include_router(security_routes.router, dependencies=[Depends(workspace_guard)])
+app.include_router(storage_routes.router, dependencies=[Depends(workspace_guard)])
 
 
 @app.get("/health", response_model=HealthOut)

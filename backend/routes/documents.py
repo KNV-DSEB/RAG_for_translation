@@ -17,6 +17,7 @@ from fastapi import Depends, APIRouter, File, Form, HTTPException, Query, Upload
 
 from backend.config import settings
 from backend.auth import ownership
+from backend.storage import service as storage_service
 from backend.auth.context import request_user as _request_user
 from backend.db import get_conn
 from backend.rag import ingest, qa
@@ -280,3 +281,71 @@ def ask_documents(
 def qa_history(workspace_id: int = Query(...), limit: int = Query(default=50, ge=1, le=500)) -> list[dict[str, Any]]:
     _require_workspace(workspace_id)
     return qa.history(workspace_id, limit=limit)
+
+
+# ============================== Tải lên qua kho riêng (Phase 7) ==============================
+
+
+@router.post("/upload-intent")
+def upload_intent(payload: dict[str, Any]) -> dict[str, Any]:
+    """Xin giấy phép tải MỘT tệp lên kho riêng.
+
+    Máy chủ tự dựng khoá đối tượng. Client chỉ nói tên tệp gốc và cỡ tệp — nó KHÔNG khai
+    được nơi ghi, vì nếu khai được thì nó ghi được đè lên tệp của người khác.
+    """
+    workspace_id = int(payload.get("workspace_id") or 0)
+    _require_workspace(workspace_id)
+
+    filename = str(payload.get("filename") or "").strip()
+    size_bytes = int(payload.get("size_bytes") or 0)
+    if not filename:
+        raise HTTPException(status_code=400, detail="Thiếu tên tệp.")
+
+    try:
+        intent = storage_service.create_intent(workspace_id, filename, size_bytes)
+    except storage_service.UploadRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return intent.to_dict()
+
+
+@router.post("/{document_id}/finalize")
+def finalize_upload(document_id: int) -> dict[str, Any]:
+    """Chốt một lần tải lên: kiểm tệp CÓ THẬT trên kho, rồi mới xử lý.
+
+    Không tin trình duyệt báo "xong": máy chủ tự đọc lại đối tượng và tự băm nội dung.
+    """
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT workspace_id FROM documents WHERE id = ?", (document_id,)
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu này.")
+    _require_workspace(int(row["workspace_id"]))
+
+    try:
+        result = storage_service.finalize(document_id)
+    except storage_service.UploadRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return result
+
+
+@router.get("/storage-events")
+def storage_events(
+    workspace_id: int = Query(...), limit: int = Query(default=100, ge=1, le=500)
+) -> list[dict[str, Any]]:
+    """Vòng đời dữ liệu trên kho của ứng dụng.
+
+    KHÁC với Nhật ký Bảo mật: bảng kia trả lời "dữ liệu có sang bên thứ ba không", bảng
+    này trả lời "tệp nào đang nằm ở đâu, từ bao giờ, đã xoá chưa".
+    """
+    _require_workspace(workspace_id)
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, document_id, event, backend, object_key, size_bytes, sha256, "
+            "detail, created_at FROM storage_events WHERE workspace_id = ? "
+            "ORDER BY id DESC LIMIT ?",
+            (workspace_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]

@@ -37,8 +37,16 @@ PUBLIC_EXACT: frozenset[str] = frozenset(
     }
 )
 
-# Tiền tố công khai: chỉ tệp tĩnh của giao diện. KHÔNG có đường API nào ở đây.
-PUBLIC_PREFIXES: tuple[str, ...] = ("/static/", "/js/", "/css/")
+# Tiền tố công khai: tệp tĩnh của giao diện, và đường nhận tệp tải lên.
+#
+# `/storage/upload/` và `/storage/download/` nằm ngoài lớp xác thực có CHỦ ĐÍCH: chúng
+# là bản tương đương của URL ký sẵn mà Supabase phát ra, và trình duyệt cũng gửi tệp tới
+# URL đó mà không kèm JWT. Thứ cấp quyền là GIẤY PHÉP — token ngẫu nhiên 32 byte, dùng
+# một lần, hết hạn 15 phút, và khoá đích đã bị khoá cứng trong đó từ lúc máy chủ phát.
+# Cầm token chỉ ghi được đúng một tệp vào đúng một chỗ đã định. Xem `routes/storage.py`.
+PUBLIC_PREFIXES: tuple[str, ...] = (
+    "/static/", "/js/", "/css/", "/storage/upload/", "/storage/download/",
+)
 
 # Trang HTML phục vụ ở gốc. Bản thân trang không chứa dữ liệu — dữ liệu nằm sau API.
 PUBLIC_SUFFIXES: tuple[str, ...] = (".html",)

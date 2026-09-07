@@ -350,3 +350,91 @@ Ghi rõ để không ai đọc nhầm mức bảo đảm:
 - **Chưa deploy Railway hoặc Vercel.**
 - **Docker không chạy được trên máy dev** (`com.docker.service` dừng, thiếu quyền admin).
   Không phải blocker: `pgserver` cho PostgreSQL thật mà không cần Docker.
+
+---
+
+## 10. Phase 7 — kho tài liệu riêng
+
+### 10.1 Một đính chính phải nói trước
+
+CLAUDE.md từng viết hệ thống có **"đúng ba đường dữ liệu ra khỏi máy"**. Câu đó đã sai
+**từ commit `044fc1f`** — khi thêm PostgreSQL, `psycopg` mở một kết nối mạng thứ tư mà
+invariant C1a không hề thấy, vì `psycopg` không nằm trong danh sách thư viện nó canh.
+Tôi viết commit đó và không nhận ra.
+
+Cách sửa không phải là thêm `psycopg` vào danh sách cấm, mà là **phân đúng hai hạng mục**:
+
+| | Gồm | Nhật ký | Hồ sơ mật |
+|---|---|---|---|
+| **Bên thứ ba** — dữ liệu rời khỏi tổ chức | Gemini · DuckDuckGo · edge-tts · gTTS | `egress_log` | phải xin phép trước |
+| **Hạ tầng của chính ứng dụng** — dữ liệu được CẤT | PostgreSQL · Supabase Storage | `storage_events` | lớp đồng ý tải lên (Phase 8) |
+
+Gộp hai thứ này hỏng theo cả hai chiều: hoặc mỗi lần lưu tệp lại hỏi xin phép gửi ra
+ngoài — vô nghĩa, và làm chuyên gia quen tay bấm đồng ý; hoặc nhật ký gửi-ra-ngoài đầy
+dòng lưu trữ nội bộ khiến lần gửi thật cho Gemini chìm trong đó.
+
+`test_c16` §ST9 khoá điều này lại: lưu một tệp phải sinh **0** dòng trong `egress_log`.
+
+### 10.2 Hai cửa, mỗi cửa có tên
+
+C1b trước đây nói "chỉ `security/gateway.py` được import `providers/`". Nay là danh sách
+`DOOR_MODULES` gồm hai mục, mỗi mục kèm lý do trong chính tệp test. Thêm mục vào đó là
+thay đổi có chủ đích, nhìn thấy được trong diff — không phải nới lỏng im lặng.
+
+C1e mới: kho lưu trữ **không được** nằm trong `gateway._REGISTRY`.
+
+### 10.3 Luồng ba bước
+
+```
+1. create_intent   máy chủ kiểm quyền, kiểm cỡ/kiểu, TỰ DỰNG khoá,
+                   tạo dòng `documents` ở trạng thái awaiting_upload, phát giấy phép
+2. (trình duyệt)   tải tệp THẲNG tới URL trong giấy phép — không đi vòng qua backend
+3. finalize        máy chủ kiểm đối tượng CÓ THẬT, đọc lại nội dung, TỰ tính SHA256
+```
+
+Bước 3 không tin bất cứ điều gì trình duyệt nói. Trình duyệt có thể báo "xong" mà chưa
+tải gì, hoặc tải một tệp khác hẳn — `ST6` dựng đúng ca đó và khẳng định máy chủ ghi theo
+nội dung thật.
+
+Trạng thái `awaiting_upload` là có chủ đích: trình duyệt bỏ ngang thì dòng đó **vẫn nằm
+lại và nhìn thấy được**, thay vì im lặng biến mất.
+
+### 10.4 Khoá đối tượng do MÁY CHỦ dựng
+
+```
+users/{user_id}/workspaces/{workspace_id}/documents/{document_id}/{tên-đã-làm-sạch}
+```
+
+Client chỉ nói tên tệp gốc. Nó **không khai được nơi ghi** — khai được thì ghi đè được
+tệp của người khác. Ba mảnh danh tính nằm ngay trong đường dẫn nên chính sách của kho
+(RLS trên Supabase Storage) chặn được theo tiền tố mà không cần tra cơ sở dữ liệu. **Đây
+là chỗ RLS thật sự có tác dụng** — khác với truy vấn từ backend, nơi vai trò quyền cao
+bỏ qua RLS.
+
+`document_id` nằm trong đường dẫn nên hai tệp trùng tên trong cùng hồ sơ không đè nhau.
+Tên người dùng đặt không được dùng làm định danh: nó không duy nhất, và người dùng đổi được.
+
+Làm sạch tên giữ dấu tiếng Việt dưới dạng ASCII: `Kế hoạch tổng thể(en).docx` →
+`Ke-hoach-tong-the-en.docx`, không thành `.docx`.
+
+### 10.5 Xoá phải nói thật
+
+Kho và cơ sở dữ liệu **không chung một giao dịch**. Xoá dòng rồi coi như tệp cũng mất là
+tự lừa mình — và tệ hơn, là nói với chuyên gia rằng tài liệu khách hàng đã bị xoá trong
+khi nó vẫn nằm trên kho.
+
+`delete_document_object` trả về thứ **thật sự** xảy ra, và ghi `delete_failed` vào cả
+`documents.storage_state` lẫn `storage_events`. `ST10` ép kho từ chối xoá rồi khẳng định
+hệ thống không báo là đã xoá.
+
+### 10.6 Giới hạn — đọc kỹ trước khi tin
+
+- **`SupabaseStorage` CHƯA TỪNG CHẠY.** Toàn bộ
+  `security/providers/supabase_storage.py` viết theo tài liệu HTTP API của Supabase.
+  Máy phát triển không có credential, nên **không một dòng nào từng gọi tới máy chủ thật**.
+- **Test chạy trên `LocalStorage`** — kho thật của bản chạy trên máy, không phải bản giả
+  lập Supabase. Nó chứng minh **luồng** đúng: giấy phép dùng một lần, có trần, khoá do máy
+  chủ đặt, chốt tự băm, xoá nói thật. Nó **không** chứng minh Supabase hành xử như tài
+  liệu mô tả.
+- Trạng thái đúng: *luồng tải lên đã kiểm chứng trên kho local; tích hợp Supabase Storage
+  còn chờ credential.*

@@ -76,7 +76,26 @@ def test_c1a_only_providers_may_import_network_clients() -> None:
         )
 
 
-def test_c1b_only_gateway_may_import_providers() -> None:
+# Hai cửa, mỗi cửa một hạng mục. Danh sách này là TOÀN BỘ ngoại lệ của C1b — thêm mục
+# vào đây là một thay đổi có chủ đích, nhìn thấy được trong diff, kèm lý do.
+#
+#   security/gateway.py       cửa ra BÊN THỨ BA (Gemini, DDGS, edge-tts, gTTS).
+#                             Nhật ký `egress_log`. Hồ sơ mật phải xin phép trước.
+#   storage/cloud.py          cửa vào KHO CỦA CHÍNH ỨNG DỤNG (Supabase Storage).
+#                             Nhật ký `storage_events`. Cùng hạng với kết nối PostgreSQL.
+#
+# Vì sao không dùng chung một cửa: hai thứ cần hai câu trả lời khác nhau cho câu hỏi
+# "dữ liệu này có rời khỏi tổ chức không?" — với Gemini là CÓ, với kho riêng là KHÔNG.
+# Ép chung thì hoặc mỗi lần lưu tệp lại hỏi xin phép gửi ra ngoài (vô nghĩa, và làm
+# chuyên gia quen tay bấm đồng ý), hoặc nhật ký gửi-ra-ngoài đầy dòng lưu trữ nội bộ
+# khiến việc gửi cho Gemini chìm trong đó.
+DOOR_MODULES: tuple[str, ...] = (
+    "security/gateway.py",
+    "storage/cloud.py",
+)
+
+
+def test_c1b_only_doors_may_import_providers() -> None:
     """C1b — chỉ `security/gateway.py` được chạm tới `providers/`.
 
     Thiếu invariant này thì C1a vẫn xanh trong khi ai đó gọi thẳng
@@ -85,7 +104,7 @@ def test_c1b_only_gateway_may_import_providers() -> None:
     offenders: list[str] = []
     for path, tree in _modules():
         posix = path.as_posix()
-        if posix.endswith("security/gateway.py") or "security/providers" in posix:
+        if any(posix.endswith(d) for d in DOOR_MODULES) or "security/providers" in posix:
             continue
         for name in _imported_roots(tree):
             if name.startswith(PROVIDERS_PKG) or name.endswith(".providers"):
@@ -93,9 +112,10 @@ def test_c1b_only_gateway_may_import_providers() -> None:
 
     if offenders:
         pytest.fail(
-            "Chỉ backend/security/gateway.py được import backend.security.providers.\n"
-            "Vi phạm:\n  " + "\n  ".join(offenders)
-            , pytrace=False,
+            "Chỉ những cửa đã khai báo được import backend.security.providers:\n  "
+            + "\n  ".join(DOOR_MODULES)
+            + "\nVi phạm:\n  " + "\n  ".join(offenders),
+            pytrace=False,
         )
 
 
@@ -132,3 +152,26 @@ def test_c1c_execute_outside_operation_is_blocked() -> None:
             gateway._REGISTRY[("llm", "gemini")] = original
 
     assert not called, "execute() đã gọi provider dù không có thao tác nào đang mở"
+
+
+def test_c1e_cua_kho_khong_duoc_dang_ky_vao_gateway() -> None:
+    """C1e — kho lưu trữ KHÔNG được nằm trong bảng đăng ký của gateway.
+
+    Nếu nó lọt vào `_REGISTRY`, mỗi lần lưu một tệp sẽ trở thành một dòng "đã gửi dữ liệu
+    ra ngoài" trong màn Bảo mật. Chuyên gia mở nhật ký lên sẽ thấy hàng chục dòng gửi ra
+    ngoài cho những việc thật ra chỉ là lưu tệp vào kho của chính ứng dụng — và lần gửi
+    thật cho Gemini chìm giữa chúng.
+
+    Ngược lại cũng phải đúng: `storage_events` không được chứa lần gọi bên thứ ba nào.
+    """
+    from backend.security import gateway
+
+    dang_ky = {p for _dest, p in gateway._REGISTRY}
+    assert "supabase_storage" not in dang_ky, (
+        "Kho lưu trữ bị đăng ký vào gateway. Nó là hạ tầng của chính ứng dụng, cùng hạng "
+        "với kết nối PostgreSQL — không phải bên thứ ba."
+    )
+    assert dang_ky == {"gemini", "ddgs", "edge", "gtts"}, (
+        f"Danh sách nhà cung cấp BÊN THỨ BA đã đổi: {sorted(dang_ky)}. "
+        "Thêm một dịch vụ bên thứ ba là thay đổi lớn — sửa cả test này kèm lý do."
+    )

@@ -284,6 +284,27 @@ _SCHEMA: tuple[str, ...] = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_verdicts_ws ON expert_verdicts(workspace_id)",
     # ================= §7: bảo mật =================
+    # Nhật ký vòng đời dữ liệu trên KHO CỦA CHÍNH ỨNG DỤNG. Tách hẳn khỏi `egress_log`:
+    # `egress_log` trả lời "dữ liệu có rời khỏi tổ chức sang bên thứ ba không", còn bảng
+    # này trả lời "tệp nào đang nằm ở đâu, từ bao giờ, đã xoá chưa". Trộn hai câu hỏi vào
+    # một bảng thì cả hai đều khó trả lời — và câu quan trọng hơn (gửi cho Gemini) sẽ
+    # chìm giữa hàng chục dòng lưu trữ nội bộ.
+    """
+    CREATE TABLE IF NOT EXISTS storage_events (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id  INTEGER,
+        document_id   INTEGER,
+        user_id       TEXT,
+        -- upload_intent | uploaded | processed | downloaded | deleted | delete_failed
+        event         TEXT    NOT NULL,
+        backend       TEXT    NOT NULL,
+        object_key    TEXT,
+        size_bytes    INTEGER,
+        sha256        TEXT,
+        detail        TEXT,
+        created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    )
+    """,
     """
     -- Ghi MỌI lần dữ liệu rời khỏi máy. Chuyên gia dùng bảng này để tự kiểm chứng
     -- cam kết "chỉ gửi đoạn ngữ cảnh, không gửi cả tài liệu" (spec A7.2, A7.3).
@@ -411,6 +432,15 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # Cho phép NULL để dòng cũ từ bản chạy local vẫn nạp được — nhưng khi xác thực đã
     # bật, hồ sơ chưa có chủ thì KHÔNG ai đọc được (xem `auth/ownership.py`).
     ("workspaces", "owner_user_id", "TEXT"),
+    # ----- Kho lưu trữ đám mây -----
+    # Khoá đối tượng do MÁY CHỦ dựng: users/{uid}/workspaces/{ws}/documents/{id}/{tên}.
+    # `stored_path` cũ là đường dẫn tuyệt đối trên một máy cụ thể, không mang đi đâu được.
+    ("documents", "storage_key", "TEXT"),
+    ("documents", "content_sha256", "TEXT"),
+    # Vòng đời TỆP, tách khỏi `status` của việc trích xuất: một tệp có thể đã lên kho mà
+    # chưa xử lý xong, và hai chuyện đó hỏng độc lập với nhau.
+    # local | awaiting_upload | uploaded | deleted | delete_failed
+    ("documents", "storage_state", "TEXT NOT NULL DEFAULT 'local'"),
     # Ai đã gây ra lần gửi này. Nhật ký phải trả lời được "của ai" chứ không chỉ "của hồ sơ nào".
     ("egress_log", "user_id", "TEXT"),
     ("operations", "user_id", "TEXT"),

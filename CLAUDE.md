@@ -105,17 +105,42 @@ Mục đích: dùng cá nhân, chi phí 0 đồng, hoàn thành trong 2 tuần.
 - Không viết code khi chưa qua Plan Mode review
 
 ## Bảo mật (bắt buộc, xem `_specs/mvp-spec.md` §7)
-- Chỉ có **đúng ba đường dữ liệu ra khỏi máy**: (E1) gọi LLM, (E2) truy vấn tìm kiếm,
-  (E3) đọc lời thoại bằng edge-tts/gTTS. Cả ba BẮT BUỘC đi qua `backend/security/gateway.py`.
-  Lần TTS lấy từ cache không gọi mạng nên không tính là egress.
-  LƯU Ý: `sentence-transformers` còn TẢI MODEL từ HuggingFace lần đầu chạy. Đó là lệnh gọi
-  mạng nhưng KHÔNG mang dữ liệu khách hàng, và không đi qua gateway — nêu ra để con số
-  "ba đường" không bị hiểu là "không còn gói tin nào khác rời máy".
+- **HAI HẠNG MỤC đường mạng. Đừng gộp.** Câu "đúng ba đường dữ liệu ra khỏi máy" chỉ
+  đúng với bản chạy trên máy cá nhân, và **đã không còn đúng từ lúc thêm PostgreSQL**
+  (commit `044fc1f`): `psycopg` mở kết nối mạng tới Supabase mà invariant C1a không thấy,
+  vì `psycopg` không nằm trong danh sách thư viện nó canh. Ghi lại ở đây thay vì im lặng.
+
+  **(1) Bên thứ ba — dữ liệu rời khỏi tổ chức.** Đúng ba đường: (E1) gọi LLM, (E2) truy
+  vấn tìm kiếm, (E3) đọc lời thoại bằng edge-tts/gTTS. Cả ba BẮT BUỘC qua
+  `backend/security/gateway.py`, ghi vào `egress_log`, hồ sơ mật phải xin phép trước.
+  Lần TTS lấy từ cache không gọi mạng nên không tính.
+
+  **(2) Hạ tầng của chính ứng dụng — dữ liệu được CẤT, không phải gửi đi.** PostgreSQL
+  (`psycopg`) và Supabase Storage (`security/providers/supabase_storage.py`). Vẫn là
+  mạng, nhưng đây là nơi ứng dụng cất dữ liệu của chính nó. Nhật ký riêng
+  `storage_events`, KHÔNG trộn vào `egress_log`.
+
+  Vì sao tách: hai hạng mục cần hai câu trả lời khác nhau cho cùng câu hỏi "dữ liệu này
+  có rời khỏi tổ chức không?". Gộp lại thì hoặc mỗi lần lưu tệp lại hỏi xin phép gửi ra
+  ngoài (vô nghĩa, và làm chuyên gia quen tay bấm đồng ý), hoặc nhật ký gửi-ra-ngoài đầy
+  dòng lưu trữ nội bộ khiến lần gửi thật cho Gemini chìm trong đó.
+
+  Chuyên gia VẪN phải được báo là tệp rời khỏi thiết bị — đó là việc của lớp đồng ý tải
+  lên, không phải của `egress_log`.
+
+  LƯU Ý: `sentence-transformers` còn TẢI MODEL từ HuggingFace lần đầu chạy. Không mang
+  dữ liệu khách hàng, không qua gateway — nêu ra để không ai hiểu các con số trên là
+  "không còn gói tin nào khác rời máy".
 - **`gateway.execute()` gọi provider, không chỉ bọc quanh nó.** Context manager kiểu cũ
   (`egress()`) thì luôn có thể quên bọc; gateway đích thân gọi thì không có đường vòng.
   Ba invariant tự động canh, nằm trong `tests/test_c1_single_door.py`:
   - **C1a** chỉ `security/providers/**` được import `httpx`/`requests`/`gtts`/`edge_tts`/`ddgs`/`google.genai`
-  - **C1b** chỉ `security/gateway.py` được import `security.providers`
+  - **C1b** chỉ những CỬA đã khai báo được import `security.providers`. Hiện có hai:
+    `security/gateway.py` (bên thứ ba) và `storage/cloud.py` (kho của chính ứng dụng).
+    Danh sách nằm trong `DOOR_MODULES` — thêm mục vào đó là thay đổi có chủ đích, nhìn
+    thấy được trong diff.
+  - **C1e** kho lưu trữ KHÔNG được đăng ký vào `gateway._REGISTRY`: lọt vào đó thì mỗi
+    lần lưu tệp thành một dòng "đã gửi ra ngoài", và lần gửi thật cho Gemini chìm giữa chúng
   - **C1c** (runtime) gọi `execute()` ngoài `gateway.operation()` → chặn trước khi chạm mạng
 - **Điểm vào phải quét từ ĐĨA, không lần theo import** (`tests/test_c11_entrypoints.py`):
   - **C11a** mọi `web/js/**/*.js` parse được ở **chế độ module**. KHÔNG dùng `node --check x.js`:
