@@ -210,3 +210,143 @@ Chroma là kho tách rời, nên xoá tài liệu phải nhớ xoá ở hai nơi
 trên `document_chunks` thì `ON DELETE CASCADE` lo phần đó: không có cửa sổ nào vector còn
 sống sau khi văn bản đã chết. `test_c13e` kiểm bằng cách xoá **tài liệu** rồi khẳng định
 vector biến mất — không gọi hàm xoá vector nào cả.
+
+---
+
+## 7. Phase 6 — công cụ chuyển dữ liệu
+
+Ba bước tách bạch: **plan → migrate → verify**.
+
+```
+python scripts/migrate_local_to_cloud.py plan
+python scripts/migrate_local_to_cloud.py migrate --owner-user-id <UUID> [--dry-run]
+python scripts/migrate_local_to_cloud.py verify  --owner-user-id <UUID>
+python scripts/migrate_local_to_cloud.py history
+```
+
+### 7.1 Dữ liệu BỀN và trạng thái CHẠY
+
+21 bảng, phân loại hết, không sót không thừa (`backend/migration/spec.py`).
+
+**17 bảng dữ liệu bền — chuyển.** `workspaces` · `engagements` · `documents` ·
+`document_chunks` · `glossary` · `glossary_conflicts` · `research_runs` · `profiles` ·
+`profile_fields` · `profile_sources` · `mock_sessions` · `mock_turns` · `turn_attempts` ·
+`scores` · `expert_verdicts` · `qa_history` · `egress_log`.
+
+**4 bảng trạng thái chạy — CỐ Ý không chuyển.** Đây không phải mất dữ liệu:
+
+| Bảng | Dòng ở nguồn | Vì sao không mang sang |
+|---|---:|---|
+| `operations` | 9 | `operation_id` chỉ có nghĩa trong tiến trình đã sinh ra nó |
+| `operation_calls` | 10 | bộ đếm ngân sách của các thao tác trên |
+| `consent_grants` | 0 | **đồng ý cho ứng dụng chạy trên MÁY MÌNH không phải đồng ý cho một máy chủ ở nơi khác** |
+| `pending_consents` | 4 | challenge tuổi thọ 10 phút |
+
+`verify` khẳng định bốn bảng này **không có dòng nào trùng id với nguồn** ở đích.
+
+### 7.2 Vector: dựng lại từ văn bản chuẩn
+
+`document_chunks.text` đầy đủ (73 chunk, 0 rỗng, 73.402 ký tự) nên vector được **tạo
+lại** bằng đúng model hiện tại, không xuất biểu diễn nội bộ của Chroma.
+
+Lý do: tái lập được, kiểm chứng được, không phụ thuộc định dạng lưu trữ cũ. Xuất vector
+thô từ Chroma thì phải *tin* rằng chúng do đúng model đó tạo ra — mà không có gì chứng
+minh điều đó.
+
+### 7.3 Tính chất giữ được, và cách giữ
+
+| | Cách bảo đảm |
+|---|---|
+| **không phá nguồn** | SQLite mở bằng `mode=ro` — hệ điều hành chặn, không dựa vào việc mã không viết lệnh ghi |
+| **chạy lại được** | UPSERT theo khoá chính, GIỮ id gốc. Không dùng "có rồi thì bỏ qua" — kiểu đó bỏ sót thay đổi ở nguồn |
+| **hỏng thì dừng** | mỗi bảng một giao dịch; sổ cái ghi `failed` kèm tên lớp lỗi; chạy lại tiếp tục được |
+| **không diễn giải lại** | 121 cột nghiệp vụ được so từng dòng; nhãn tin cậy và trạng thái nhật ký chuyển nguyên trạng |
+
+### 7.4 Sổ cái `migration_runs`
+
+Trả lời một câu: *trạng thái cloud này dựng từ ảnh chụp local nào?* Ghi vân tay nguồn,
+commit git, chủ sở hữu, thời điểm, và **phân biệt `failed` với `completed`**.
+
+### 7.5 Tài liệu — CHƯA tải lên
+
+Phase 6 chỉ **kiểm kê**: đường dẫn, kích thước, SHA256, ánh xạ hồ sơ. Mọi mục mang trạng
+thái `pending_upload`, và báo cáo ghi thẳng `đã tải lên cloud: 0`.
+
+Kho lưu trữ riêng là việc của Phase 7. Ghi bất kỳ trạng thái nào khác ở đây là tuyên bố
+một việc chưa xảy ra.
+
+**Đã ghi nhận:** `documents.stored_path` là đường dẫn tuyệt đối trên máy này. Phase 7
+phải dựng đường dẫn chuẩn theo (người dùng, hồ sơ), không mang đường dẫn cũ sang.
+
+### 7.6 `plan` không ghi gì
+
+`plan` và `migrate --dry-run` không ghi vào PostgreSQL, không sửa SQLite, không sửa
+Chroma, không tải tệp, không tạo quyền đồng ý, không ghi cả vào sổ cái. `MIG1` đối chiếu
+số dòng ở đích trước và sau khi chạy thử.
+
+Chạy được cả khi chưa có UUID thật — để xem trước sẽ chuyển những gì.
+
+### 7.7 Chủ sở hữu phải là UUID THẬT
+
+`migrate` từ chối chạy nếu thiếu `--owner-user-id`, nếu chuỗi không đúng dạng UUID, hoặc
+nếu nó là UUID điền tạm (`00000000-…`). Gắn nhầm chủ thì mọi hồ sơ thuộc về một tài
+khoản không tồn tại — và **không ai mở được chúng nữa**, vì hồ sơ chưa có chủ đúng thì
+không ai đọc được (xem `backend/auth/ownership.py`).
+
+---
+
+## 8. Parity sau khi chuyển: ĐO trên bộ tài liệu THẬT
+
+§6 đo trên một fixture 5 đoạn dựng sẵn. Phần này đo trên **bộ LDSC thật, 73 đoạn**, và
+kết quả buộc phải đính chính một khẳng định trước đó của chính tài liệu này.
+
+### 8.1 Parity: khớp tuyệt đối
+
+Cùng ba truy vấn, chạy qua Chroma (kho hiện tại) rồi qua pgvector (sau khi chuyển):
+
+| Truy vấn | Chroma | pgvector | Xếp hạng |
+|---|---:|---:|---|
+| "Tổng giá trị tài trợ của dự án là bao nhiêu?" | 0.4857 | 0.4857 | **khớp** |
+| "Bao nhiêu hộ dân được hỗ trợ?" | 0.4139 | 0.4139 | **khớp** |
+| "Công thức nấu phở bò Hà Nội?" (lạc đề) | 0.6613 | 0.6613 | **khớp** |
+
+Lệch khoảng cách lớn nhất: **1.0e-06** — chỉ là làm tròn ở chữ số thứ sáu.
+
+**Kết luận parity: ĐẠT.** pgvector tái hiện Chroma trên dữ liệu thật.
+
+### 8.2 Đính chính: ngưỡng 0.75 KHÔNG tách được câu lạc đề trên bộ thật
+
+§6 của tài liệu này (và commit `89f46b7`) viết: *"ngưỡng 0.75 tách đúng: hai câu đúng
+chủ đề nằm dưới, câu lạc đề nằm trên"*. Câu đó **chỉ đúng trên fixture 5 đoạn**.
+
+Trên bộ LDSC thật, câu hỏi về phở bò cho khoảng cách **0.6613** — *dưới* ngưỡng 0.75,
+nên nó **không** được đánh dấu là ngữ cảnh yếu.
+
+Ba điều phải nói rõ, không gộp làm một:
+
+1. **Không phải hồi quy do migration.** Chroma cho đúng 0.6613 trên cùng dữ liệu. Bản
+   chạy local vốn đã như vậy từ trước.
+2. **`WEAK_CONTEXT_DISTANCE` chỉ bật cảnh báo, không chặn.** Xem `backend/rag/qa.py:189`
+   — nó thêm câu "dựa trên ngữ cảnh hạn chế", không từ chối trả lời. Việc từ chối bịa
+   dựa vào lời nhắc gửi cho LLM (tiêu chí nghiệm thu T5), không dựa vào ngưỡng này.
+3. **Ngưỡng KHÔNG được đổi trong đợt này.** Không có bằng chứng cho một giá trị tốt hơn,
+   và đổi nó để một test nào đó xanh là đúng thứ dự án này cấm. Đây là việc còn để ngỏ,
+   ghi lại ở đây để không ai tưởng nó đã được giải quyết.
+
+`test_c13f` đã được đổi tên và thu hẹp khẳng định cho khớp bằng chứng.
+
+---
+
+## 9. Giới hạn còn lại của Phase 6
+
+Ghi rõ để không ai đọc nhầm mức bảo đảm:
+
+- **Chưa có credential Supabase.** Toàn bộ kiểm chứng chạy trên PostgreSQL 16.2 +
+  pgvector 0.6.2 nhúng bằng `pgserver`. Đó là **cùng engine**, nhưng KHÔNG phải một lần
+  chạy thật trên Supabase. Trạng thái đúng: *tương thích PostgreSQL/pgvector đã kiểm
+  chứng; tích hợp Supabase thật còn chờ credential.*
+- **Tệp tài liệu chưa được tải lên.** Đã kiểm kê kèm SHA256, trạng thái `pending_upload`,
+  số đã tải lên là **0**.
+- **Chưa deploy Railway hoặc Vercel.**
+- **Docker không chạy được trên máy dev** (`com.docker.service` dừng, thiếu quyền admin).
+  Không phải blocker: `pgserver` cho PostgreSQL thật mà không cần Docker.

@@ -15,7 +15,7 @@ nhau, hoặc vì một chỉ mục xấp xỉ lặng lẽ đổi tập ứng vi�
   C13c  xếp hạng của pgvector khớp cosine tính tay trên cùng vector đó
   C13d  khoảng cách khớp tới sai số của float32
   C13e  xoá tài liệu là vector biến mất
-  C13f  ngưỡng 0.75 vẫn phân biệt đúng ngữ cảnh mạnh/yếu trên thang của pgvector
+  C13f  ngưỡng 0.75 vẫn nằm trên cùng thang đo (xem đính chính trong chính test đó)
 
 Chạy trên PostgreSQL thật (`pgserver`). Bỏ qua khi bộ test đang chạy trên SQLite.
 """
@@ -164,11 +164,24 @@ def test_c13e_xoa_tai_lieu_la_vector_bien_mat(indexed):
     assert pgvector_store.query(ws, qv, pool_size=10) == []
 
 
-def test_c13f_nguong_075_van_phan_biet_dung(indexed):
-    """Ngưỡng ngữ cảnh yếu 0.75 phải còn nghĩa trên thang đo của pgvector.
+def test_c13f_nguong_075_van_o_cung_thang_do(indexed):
+    """Ngưỡng 0.75 vẫn nằm trên CÙNG THANG ĐO sau khi đổi kho vector.
 
-    Không đủ để nói "cùng công thức nên giữ nguyên": phải thấy nó thật sự tách được câu
-    hỏi có trong tài liệu khỏi câu hỏi không liên quan.
+    ĐÍNH CHÍNH một khẳng định quá mức của chính tôi (commit 89f46b7).
+
+    Trước đây test này tên là "ngưỡng 0.75 vẫn phân biệt đúng", và nó xanh — nhưng chỉ
+    trên đúng năm đoạn văn dựng sẵn ở fixture này. Đo lại trên bộ LDSC thật (73 đoạn),
+    câu lạc đề "Công thức nấu phở bò Hà Nội?" cho khoảng cách **0.6613**, tức là DƯỚI
+    ngưỡng 0.75 và không hề bị đánh dấu là ngữ cảnh yếu.
+
+    Chroma cho **đúng con số đó** trên cùng bộ dữ liệu (xem `docs/cloud-migration.md`
+    §8), nên đây KHÔNG phải hồi quy do chuyển kho vector — nó là tính chất sẵn có của
+    ngưỡng trên bộ tài liệu thật, và bản chạy local vốn đã như vậy.
+
+    Vì thế test này chỉ khẳng định đúng thứ nó chứng minh được: hai kho vector cùng thang
+    đo, và ngưỡng nằm trong khoảng có nghĩa. Việc ngưỡng 0.75 có phải giá trị đúng cho
+    bộ tài liệu thật hay không là một câu hỏi RIÊNG, chưa có bằng chứng để trả lời, và
+    không được sửa ngưỡng chỉ để một test nào đó xanh.
     """
     from backend.rag import pgvector_store, store
     from backend.rag.qa import WEAK_CONTEXT_DISTANCE
@@ -187,6 +200,12 @@ def test_c13f_nguong_075_van_phan_biet_dung(indexed):
         f"câu hỏi CÓ trong tài liệu lại bị coi là ngữ cảnh yếu "
         f"(khoảng cách {best_on:.3f} ≥ ngưỡng {WEAK_CONTEXT_DISTANCE})"
     )
+    # Chỉ khẳng định thứ tự tương đối — câu lạc đề phải XA HƠN câu đúng chủ đề. KHÔNG
+    # khẳng định nó vượt ngưỡng: trên bộ tài liệu thật thì nó không vượt, và đó là sự
+    # thật về ngưỡng chứ không phải lỗi của kho vector.
     assert best_off > best_on, (
         f"câu hỏi lạc đề {best_off:.3f} không xa hơn câu đúng chủ đề {best_on:.3f}"
+    )
+    assert 0.0 <= best_on <= 2.0 and 0.0 <= best_off <= 2.0, (
+        "khoảng cách nằm ngoài [0, 2] — không còn là cosine distance nữa"
     )
