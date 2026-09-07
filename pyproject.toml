@@ -41,6 +41,7 @@ dependencies = [
     "psutil>=5.9",              # theo dõi RAM ở /health (ngân sách 7.8 GB)
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
+    "pyjwt[crypto]>=2.9",
 ]
 
 [dependency-groups]

@@ -197,3 +197,20 @@ def connect_sqlite() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     return conn
+
+
+def is_unique_violation(exc: BaseException) -> bool:
+    """Lỗi trùng khoá, nhận diện được trên cả hai cơ sở dữ liệu.
+
+    `except sqlite3.IntegrityError` chỉ đúng trên SQLite. Trên PostgreSQL, psycopg ném
+    `UniqueViolation` — cùng ý nghĩa, khác lớp hoàn toàn. Bắt nhầm lớp thì lỗi trùng tên
+    hồ sơ biến thành 500 thay vì 409, và người dùng nhận được thông báo vô nghĩa.
+    """
+    if isinstance(exc, sqlite3.IntegrityError):
+        return True
+    # Không import psycopg ở đầu tệp: bản chạy trên máy cá nhân không cài nó.
+    try:
+        from psycopg import errors as pg_errors
+    except ImportError:
+        return False
+    return isinstance(exc, pg_errors.UniqueViolation)

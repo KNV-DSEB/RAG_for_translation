@@ -159,6 +159,14 @@ class Settings:
     supabase_jwt_issuer: str = field(
         default_factory=lambda: os.getenv("SUPABASE_JWT_ISSUER", "").strip()
     )
+    # Khoá kiểm chữ ký JWT, giữ TẠI CHỖ — xem `backend/auth/verify.py` giải thích vì sao
+    # không tải JWKS qua mạng (invariant C1a + tuyên bố "đúng ba đường ra ngoài").
+    supabase_jwt_secret: str = field(
+        default_factory=lambda: os.getenv("SUPABASE_JWT_SECRET", "").strip()
+    )
+    supabase_jwt_jwks: str = field(
+        default_factory=lambda: os.getenv("SUPABASE_JWT_JWKS", "").strip()
+    )
     supabase_jwt_audience: str = field(
         default_factory=lambda: os.getenv("SUPABASE_JWT_AUDIENCE", "authenticated").strip()
     )

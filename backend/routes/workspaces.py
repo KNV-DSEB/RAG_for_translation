@@ -13,6 +13,8 @@ import sqlite3
 
 from fastapi import APIRouter, HTTPException
 
+from backend.auth.context import request_user
+from backend.database.driver import is_unique_violation
 from backend.db import get_conn
 from backend.rag import ingest
 from backend.schemas import WorkspaceCreate, WorkspaceOut, WorkspaceUpdate
@@ -47,8 +49,21 @@ def _to_out(row: dict[str, object]) -> WorkspaceOut:
 
 @router.get("", response_model=list[WorkspaceOut])
 def list_workspaces() -> list[WorkspaceOut]:
+    """Chỉ hồ sơ của chính người đang gọi.
+
+    Trước đây hàm này trả về MỌI hồ sơ. Trên máy cá nhân thì đúng — chỉ có một người.
+    Trên web thì đó là rò rỉ: người khác đọc được tên tổ chức khách hàng của nhau, mà
+    riêng danh sách tên khách hàng đã là thông tin cần giữ kín.
+    """
+    user = request_user()
+    sql = _SELECT_WITH_COUNTS
+    params: tuple[Any, ...] = ()
+    if user is not None:
+        sql += " WHERE w.owner_user_id = ?"
+        params = (user.user_id,)
+    sql += " ORDER BY w.updated_at DESC"
     with get_conn() as conn:
-        rows = conn.execute(_SELECT_WITH_COUNTS + " ORDER BY w.updated_at DESC").fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [_to_out(dict(r)) for r in rows]
 
 
@@ -58,18 +73,23 @@ def create_workspace(payload: WorkspaceCreate) -> WorkspaceOut:
         with get_conn() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO workspaces (name, industry, is_confidential, notes)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO workspaces (name, industry, is_confidential, notes, owner_user_id)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     payload.name.strip(),
                     payload.industry,
                     int(payload.is_confidential),
                     payload.notes,
+                    # Chủ sở hữu gán NGAY lúc tạo, trong cùng câu INSERT. Gán ở bước sau
+                    # thì có một khoảnh khắc hồ sơ tồn tại mà chưa có chủ.
+                    user.user_id if (user := request_user()) is not None else None,
                 ),
             )
             new_id = int(cur.lastrowid or 0)
-    except sqlite3.IntegrityError as exc:
+    except Exception as exc:
+        if not is_unique_violation(exc):
+            raise
         raise HTTPException(
             status_code=409,
             detail=f"Đã có hồ sơ tên '{payload.name}'. Chọn tên khác hoặc mở hồ sơ cũ.",

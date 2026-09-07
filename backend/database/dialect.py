@@ -110,10 +110,31 @@ def _translate_datetime(sql: str) -> str:
     return re.sub(r"datetime\(\s*'now'\s*\)", PG_NOW, sql, flags=re.IGNORECASE)
 
 
+def _translate_collate(sql: str) -> str:
+    """`COLLATE NOCASE` là của riêng SQLite — Postgres không có collation tên đó.
+
+    Tương đương gần nhất mà không phải cài extension: `lower(cột)`. Hai bên không
+    giống hệt nhau (NOCASE của SQLite chỉ gấp chữ ASCII, `lower()` của Postgres gấp
+    cả chữ có dấu), nhưng đây là mệnh đề SẮP XẾP cho bảng thuật ngữ tiếng Việt —
+    `lower()` xử lý dấu tiếng Việt còn đúng hơn.
+
+    Bắt được lỗi này nhờ chạy test trên PostgreSQL THẬT. Câu lệnh vẫn hợp lệ về cú
+    pháp nên không phép kiểm tĩnh nào thấy, và trên đường chạy bình thường nó còn bị
+    lớp kiểm quyền che mất — guard trả 404 trước khi tới được truy vấn này.
+    """
+    return re.sub(
+        r"(\b[\w.]+)\s+COLLATE\s+NOCASE\b",
+        lambda m: f"lower({m.group(1)})",
+        sql,
+        flags=re.IGNORECASE,
+    )
+
+
 def to_postgres(sql: str) -> str:
     """Dịch một câu SQL viết theo phương ngữ SQLite sang PostgreSQL."""
     sql = qmark_to_percent(sql)
     sql = _translate_datetime(sql)
+    sql = _translate_collate(sql)
     sql = re.sub(r"\bINSERT\s+OR\s+IGNORE\s+INTO\b", "INSERT INTO", sql, flags=re.I)
     return sql
 

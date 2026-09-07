@@ -137,7 +137,9 @@ def _progress(conn: Any, workspace_id: int) -> dict[str, Any]:
         JOIN scores sc ON sc.attempt_id = a.id
         WHERE s.workspace_id = ?
         GROUP BY s.id
-        HAVING n_scored > 0
+        -- Nhắc lại cả biểu thức thay vì dùng alias `n_scored`: SQLite cho phép tham
+        -- chiếu alias của SELECT trong HAVING, chuẩn SQL và PostgreSQL thì không.
+        HAVING COUNT(sc.id) > 0
         ORDER BY s.created_at
         """,
         (workspace_id,),

@@ -17,6 +17,8 @@ from backend.security import gateway, llm
 from fastapi import Depends, APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.auth import ownership
+from backend.auth.context import request_user as _request_user
 from backend.db import get_conn
 from backend.simulation import scorer
 from backend.simulation.generator import generate_script
@@ -46,13 +48,8 @@ class AttemptRequest(BaseModel):
 
 
 def _require_workspace(workspace_id: int) -> dict[str, Any]:
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM workspaces WHERE id = ?", (workspace_id,)
-        ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ khách hàng này.")
-    return dict(row)
+    """Giữ tên cũ, phần kiểm nằm ở `auth.ownership` — xem chú thích ở `documents.py`."""
+    return ownership.require_workspace(workspace_id, _request_user())
 
 
 @router.get("/context")
@@ -83,8 +80,14 @@ def get_context(workspace_id: int = Query(...)) -> dict[str, Any]:
 
         entities = conn.execute(
             """
-            SELECT DISTINCT entity_name, entity_role FROM profiles WHERE workspace_id = ?
-            ORDER BY CASE entity_role WHEN 'client' THEN 0 ELSE 1 END
+            -- Đưa khoá sắp xếp VÀO danh sách chọn. Với `SELECT DISTINCT`, PostgreSQL
+            -- đòi mọi biểu thức trong ORDER BY phải có mặt ở danh sách chọn — nếu không
+            -- thì thứ tự phụ thuộc vào hàng nào bị loại khi khử trùng lặp, tức là không
+            -- xác định. SQLite im lặng cho qua; đòi hỏi của PostgreSQL mới là đúng.
+            SELECT DISTINCT entity_name, entity_role,
+                   CASE entity_role WHEN 'client' THEN 0 ELSE 1 END AS role_rank
+            FROM profiles WHERE workspace_id = ?
+            ORDER BY role_rank
             """,
             (workspace_id,),
         ).fetchall()

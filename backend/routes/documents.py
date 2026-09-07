@@ -16,6 +16,8 @@ from backend.security import gateway, llm
 from fastapi import Depends, APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from backend.config import settings
+from backend.auth import ownership
+from backend.auth.context import request_user as _request_user
 from backend.db import get_conn
 from backend.rag import ingest, qa
 from backend.rag.extractors import SUPPORTED_EXTENSIONS
@@ -25,10 +27,13 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 def _require_workspace(workspace_id: int) -> None:
-    with get_conn() as conn:
-        row = conn.execute("SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ khách hàng này.")
+    """Giữ lại tên cũ để không phải sửa chỗ gọi; phần kiểm nằm ở `auth.ownership`.
+
+    Trước đợt này có ba bản hàm này sao chép nhau ở ba tệp, và cả ba chỉ kiểm hồ sơ có
+    tồn tại không — không kiểm của ai. Thêm quyền sở hữu vào ba bản riêng thì kiểu gì
+    cũng có ngày một bản bị bỏ quên, và bản bị quên chính là lỗ rò.
+    """
+    ownership.require_workspace(workspace_id, _request_user())
 
 
 @router.get("")

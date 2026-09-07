@@ -15,11 +15,14 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 import psutil
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.auth.guard import workspace_guard
+from backend.auth.middleware import auth_middleware
 from backend.config import settings
+from fastapi.middleware.cors import CORSMiddleware
 from backend.db import init_db
 from backend.rag.extractors import ExtractionError
 from backend.research.search import SearchBudgetExceeded, SearchUnavailable
@@ -163,15 +166,28 @@ async def handle_search_budget(request: Request, exc: SearchBudgetExceeded) -> J
 
 # ============================== Routes ==============================
 
-app.include_router(workspace_routes.router)
-app.include_router(dashboard_routes.router)
-app.include_router(document_routes.router)
-app.include_router(research_routes.router)
-app.include_router(glossary_routes.router)
-app.include_router(simulate_routes.router)
-app.include_router(speech_routes.router)
-app.include_router(feedback_routes.router)
-app.include_router(security_routes.router)
+# CORS. Giao diện chạy ở Vercel, backend ở Railway — hai origin khác nhau, nên trình
+# duyệt bắt buộc phải có preflight. Danh sách origin lấy từ `FRONTEND_ORIGINS`, KHÔNG
+# dùng "*": với API đã xác thực, wildcard nghĩa là trang bất kỳ cũng gọi được kèm token.
+if settings.frontend_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.frontend_origins),
+        allow_credentials=False,   # dùng Bearer token, không dùng cookie
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Operation-Id", "X-Client-Session-Id"],
+        max_age=600,
+    )
+
+app.include_router(workspace_routes.router, dependencies=[Depends(workspace_guard)])
+app.include_router(dashboard_routes.router, dependencies=[Depends(workspace_guard)])
+app.include_router(document_routes.router, dependencies=[Depends(workspace_guard)])
+app.include_router(research_routes.router, dependencies=[Depends(workspace_guard)])
+app.include_router(glossary_routes.router, dependencies=[Depends(workspace_guard)])
+app.include_router(simulate_routes.router, dependencies=[Depends(workspace_guard)])
+app.include_router(speech_routes.router, dependencies=[Depends(workspace_guard)])
+app.include_router(feedback_routes.router, dependencies=[Depends(workspace_guard)])
+app.include_router(security_routes.router, dependencies=[Depends(workspace_guard)])
 
 
 @app.get("/health", response_model=HealthOut)
@@ -257,6 +273,11 @@ def ping_llm(workspace_id: int | None = None) -> dict[str, object]:
 # Một tiến trình, một cổng — không còn phải chạy song song Streamlit ở 8501.
 
 _WEB_DIR = settings.base_dir / "web"
+
+
+# Middleware đăng ký SAU thì chạy TRƯỚC (Starlette xếp chồng ngược). Đặt xác thực ở đây
+# để nó chạy trước mọi thứ khác — kể cả trước lớp no-cache bên dưới.
+app.middleware("http")(auth_middleware)
 
 
 @app.middleware("http")

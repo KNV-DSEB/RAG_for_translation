@@ -24,7 +24,11 @@ _SCHEMA: tuple[str, ...] = (
     """
     CREATE TABLE IF NOT EXISTS workspaces (
         id               INTEGER PRIMARY KEY AUTOINCREMENT,
-        name             TEXT    NOT NULL UNIQUE,
+        -- KHÔNG còn UNIQUE toàn cục. Với nhiều người dùng, tên trùng nhau giữa hai
+        -- người là chuyện bình thường (hai phiên dịch viên cùng có khách "Bộ Ngoại giao"),
+        -- và tệ hơn: UNIQUE toàn cục làm mã lỗi 409 tiết lộ rằng NGƯỜI KHÁC đã có hồ sơ
+        -- tên đó. Duy nhất theo (chủ sở hữu, tên) — chỉ mục dựng trong `init_db`.
+        name             TEXT    NOT NULL,
         industry         TEXT,
         -- Cờ mật: bật thì mọi lần gửi dữ liệu ra ngoài phải xin đồng ý trước (spec §7.2)
         is_confidential  INTEGER NOT NULL DEFAULT 0,
@@ -402,6 +406,17 @@ _ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("egress_log", "operation_id", "TEXT"),
     ("egress_log", "status", "TEXT NOT NULL DEFAULT 'attempt_succeeded'"),
     ("egress_log", "error_class", "TEXT"),
+    # ----- Quyền sở hữu (chuẩn bị cho nhiều người dùng) -----
+    # UUID `sub` của Supabase Auth. KHÔNG dùng email: email đổi được, `sub` thì không.
+    # Cho phép NULL để dòng cũ từ bản chạy local vẫn nạp được — nhưng khi xác thực đã
+    # bật, hồ sơ chưa có chủ thì KHÔNG ai đọc được (xem `auth/ownership.py`).
+    ("workspaces", "owner_user_id", "TEXT"),
+    # Ai đã gây ra lần gửi này. Nhật ký phải trả lời được "của ai" chứ không chỉ "của hồ sơ nào".
+    ("egress_log", "user_id", "TEXT"),
+    ("operations", "user_id", "TEXT"),
+    # Quyền phiên gắn với PHIÊN TRÌNH DUYỆT, không phải vòng đời tiến trình máy chủ.
+    ("consent_grants", "user_id", "TEXT"),
+    ("consent_grants", "client_session_id", "TEXT"),
 )
 
 # Đổi tên cột cho khớp thứ CODE chứng minh được, không phải thứ ta mong nó là.
@@ -486,6 +501,19 @@ def init_db() -> list[str]:
         _rename_columns(conn)
         _migrate(conn)
         names = introspect.table_names(conn)
+
+    with get_conn() as conn:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS ix_workspaces_owner ON workspaces (owner_user_id)"
+        )
+        # Duy nhất theo (chủ sở hữu, tên), không phải theo tên toàn hệ thống.
+        # LƯU Ý về cơ sở dữ liệu CŨ trên máy cá nhân: `CREATE TABLE IF NOT EXISTS` không
+        # gỡ được ràng buộc UNIQUE đã có trên cột `name`, nên bản local vẫn giữ nó. Vô
+        # hại ở đó vì chỉ có một người dùng; cơ sở dữ liệu cloud tạo mới nên đúng ngay.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_workspaces_owner_name "
+            "ON workspaces (owner_user_id, name)"
+        )
 
     if driver.is_postgres():
         # Cột vector chỉ tồn tại trên PostgreSQL. Đặt sau vòng CREATE ở trên vì nó là
