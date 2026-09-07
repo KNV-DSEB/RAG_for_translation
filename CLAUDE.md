@@ -117,6 +117,17 @@ Mục đích: dùng cá nhân, chi phí 0 đồng, hoàn thành trong 2 tuần.
   - **C1a** chỉ `security/providers/**` được import `httpx`/`requests`/`gtts`/`edge_tts`/`ddgs`/`google.genai`
   - **C1b** chỉ `security/gateway.py` được import `security.providers`
   - **C1c** (runtime) gọi `execute()` ngoài `gateway.operation()` → chặn trước khi chạm mạng
+- **Điểm vào phải quét từ ĐĨA, không lần theo import** (`tests/test_c11_entrypoints.py`):
+  - **C11a** mọi `web/js/**/*.js` parse được ở **chế độ module**. KHÔNG dùng `node --check x.js`:
+    nó đọc tệp như script CommonJS và trả `exit=0` cho cả tệp hỏng thật. Phải
+    `node --input-type=module --check`. Đo trên máy này: cùng một tệp vỡ chuỗi cho
+    `exit=0` với `--check x.js` và `exit=1` với `--check x.mjs`.
+  - **C11b** mọi `src`/`href` cục bộ trong mọi `web/**/*.html` phải trỏ tới tệp có thật
+  - **C11c** script mà từng trang thật sự nạp phải parse được
+  - **C11d** `compileall backend` — phía Python cũng vỡ chuỗi y hệt khi sửa bằng script
+  Lý do: `web/gallery.html` là gốc RIÊNG, không trang nào trong SPA trỏ tới. Tìm điểm vào
+  bằng cách lần theo import từ `index.html` thì không bao giờ thấy nó, nên nó hỏng nguyên
+  một vòng sửa mà mọi phép kiểm đều xanh.
 - **Đơn vị đồng ý là THAO TÁC, không phải lệnh gọi.** Một lần `/research/run` gọi ra ngoài
   tới ~13 lần; hỏi từng lệnh thì giao diện thử lại cả request và lần chạy không bao giờ kết
   thúc. Mỗi route egress mở `gateway.operation(kind=..., declares=[...])` khai TRƯỚC gọi ai
