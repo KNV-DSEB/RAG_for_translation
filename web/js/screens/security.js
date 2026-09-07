@@ -110,7 +110,11 @@ export async function render(root) {
                     text:
                       `${DEST_LABEL[g.destination] ?? g.destination} · ` +
                       `${g.provider} · ` +
-                      (g.scope === "session" ? "tới khi đóng ứng dụng" : "một thao tác"),
+                      // Nhãn phạm vi lấy từ máy chủ: ngữ nghĩa "phiên" khác nhau
+                      // giữa bản chạy trên máy và bản chạy trên cloud.
+                      (g.scope === "session"
+                        ? (consent.session_scope_label ?? "tới khi đóng ứng dụng")
+                        : "một thao tác"),
                   })
                 )
               : [el("span.badge.badge-warn", { text: "chưa cho phép dịch vụ nào" })],

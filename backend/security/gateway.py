@@ -32,6 +32,9 @@ import json
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
+
+from backend.auth.context import request_session_id, request_user
+from backend.database import driver as _driver
 from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any, Iterator, Literal
@@ -205,6 +208,31 @@ class OperationPreview:
     n_chars: int
 
     @property
+    def session_scope_label(self) -> str:
+        """Nhãn cho nút phạm vi rộng hơn — SINH RA TỪ chế độ đang chạy, không viết tay.
+
+        Trên máy cá nhân, quyền phiên bị xoá lúc tiến trình khởi động nên "cho tới khi
+        đóng ứng dụng" đúng nghĩa đen.
+
+        Trên cloud thì không: backend khởi động lại vì deploy, vì scale, vì crash — không
+        liên quan gì tới chuyên gia. Quyền ở đó gắn với PHIÊN TRÌNH DUYỆT và tự hết hạn.
+        Giữ nguyên câu cũ trên cloud là nói dối, nên câu chữ phải do máy chủ cấp, không
+        để giao diện tự viết rồi lệch dần.
+        """
+        if _driver.is_postgres():
+            return f"Cho tới khi đóng tab này (tối đa {SESSION_TTL_HOURS} giờ)"
+        return "Cho tới khi đóng ứng dụng"
+
+    @property
+    def session_scope_note(self) -> str:
+        if _driver.is_postgres():
+            return (
+                f"Quyền này gắn với phiên trình duyệt hiện tại và tự hết hạn sau "
+                f"{SESSION_TTL_HOURS} giờ. Mở tab mới hoặc máy khác thì sẽ hỏi lại."
+            )
+        return "Quyền này mất khi bạn đóng ứng dụng."
+
+    @property
     def headline(self) -> str:
         parts = [
             f"{d.unit_calls} lần tới {PROVIDER_LABELS.get(d.provider, d.provider)}"
@@ -252,6 +280,10 @@ class OperationPreview:
             "operation_kind": self.operation_kind,
             "declares": [d.as_dict() for d in self.declares],
             "scope_note": self.scope_note,
+            # Câu chữ cho nút phạm vi rộng do MÁY CHỦ cấp. Giao diện tự viết thì nó sẽ
+            # lệch khỏi thứ backend thật sự thực thi, và lệch theo chiều hứa nhiều hơn.
+            "session_scope_label": self.session_scope_label,
+            "session_scope_note": self.session_scope_note,
             "payload_excerpt": self.payload_excerpt,
             "payload_known": self.payload_known,
             "payload_truncated": self.payload_truncated,
@@ -316,6 +348,11 @@ def _resolve(destination: str, provider: str):
     return getattr(import_module(module_path), func_name)
 
 
+def _identity_user_id() -> str | None:
+    user = request_user()
+    return user.user_id if user is not None else None
+
+
 def _log(req: EgressRequest, *, status: Status, error_class: str | None = None) -> None:
     """Ghi một dòng nhật ký cho MỘT lệnh gọi.
 
@@ -326,14 +363,17 @@ def _log(req: EgressRequest, *, status: Status, error_class: str | None = None) 
             """
             INSERT INTO egress_log
                 (workspace_id, module, destination, provider, endpoint, n_chars,
-                 summary, consented, status, error_class, operation_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 summary, consented, status, error_class, operation_id, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 req.workspace_id, req.module, req.destination, req.provider, req.endpoint,
                 req.n_chars, req.summary,
                 1 if status != "blocked" else 0,   # cột cũ, giữ cho dữ liệu lịch sử đọc được
                 status, error_class, req.operation_id or None,
+                # Nhật ký phải trả lời được "AI đã gây ra lần gửi này", không chỉ "hồ sơ
+                # nào". Lấy từ JWT đã xác minh, không lấy từ thân request.
+                _identity_user_id(),
             ),
         )
 
@@ -348,17 +388,30 @@ def _has_grant(workspace_id: int, operation_id: str, destination: str, provider:
     phiên (`operation_id IS NULL`) làm việc resume trượt, và nút "cho tới khi đóng ứng
     dụng" không làm được đúng điều nó ghi trên mặt.
     """
+    user = request_user()
+    session = request_session_id()
+
+    sql = """
+        SELECT 1 FROM consent_grants
+        WHERE workspace_id = ? AND destination = ? AND provider = ?
+          AND expires_at > datetime('now')
+          AND (operation_id = ? OR operation_id IS NULL)
+    """
+    params: list[Any] = [workspace_id, destination, provider, operation_id]
+
+    if user is not None:
+        # Quyền của người này, không phải của bất kỳ ai đã bấm đồng ý trước đó.
+        sql += " AND user_id = ?"
+        params.append(user.user_id)
+        # Quyền PHIÊN chỉ có hiệu lực trong đúng phiên trình duyệt đã cấp nó. Không có
+        # ràng buộc này thì một tab khác, hoặc một thiết bị khác của cùng người, sẽ dùng
+        # lại được quyền mà chủ nhân tưởng đã đóng lại khi tắt tab.
+        sql += " AND (scope = 'operation' OR client_session_id = ?)"
+        params.append(session or "")
+
+    sql += " LIMIT 1"
     with get_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT 1 FROM consent_grants
-            WHERE workspace_id = ? AND destination = ? AND provider = ?
-              AND expires_at > datetime('now')
-              AND (operation_id = ? OR operation_id IS NULL)
-            LIMIT 1
-            """,
-            (workspace_id, destination, provider, operation_id),
-        ).fetchone()
+        row = conn.execute(sql, tuple(params)).fetchone()
     return row is not None
 
 
@@ -380,6 +433,16 @@ def grant_from_pending(consent_request_id: str, scope: str) -> dict[str, Any]:
     """
     if scope not in ("operation", "session"):
         raise EgressError("Phạm vi đồng ý phải là 'operation' hoặc 'session'.")
+
+    user = request_user()
+    session_id = request_session_id()
+    if scope == "session" and user is not None and not session_id:
+        # Không có mã phiên thì "trong phiên này" không có nghĩa gì cả — và cấp một quyền
+        # 8 giờ không gắn với phiên nào là cấp rộng hơn thứ hộp thoại đã hứa.
+        raise EgressError(
+            "Thiếu header X-Client-Session-Id nên không xác định được “phiên này” là phiên nào. "
+            "Tải lại trang rồi thử lại."
+        )
 
     with get_conn() as conn:
         pending = conn.execute(
@@ -406,11 +469,14 @@ def grant_from_pending(consent_request_id: str, scope: str) -> dict[str, Any]:
             conn.execute(
                 """
                 INSERT INTO consent_grants
-                    (workspace_id, operation_id, scope, destination, provider, expires_at)
-                VALUES (?, ?, ?, ?, ?, datetime('now', ?))
+                    (workspace_id, operation_id, scope, destination, provider, expires_at,
+                     user_id, client_session_id)
+                VALUES (?, ?, ?, ?, ?, datetime('now', ?), ?, ?)
                 """,
                 (pending["workspace_id"], operation_id, scope,
-                 item["destination"], item["provider"], ttl),
+                 item["destination"], item["provider"], ttl,
+                 user.user_id if user is not None else None,
+                 session_id),
             )
         conn.execute("UPDATE pending_consents SET used = 1 WHERE id = ?", (consent_request_id,))
 
@@ -429,19 +495,39 @@ def revoke_consent(workspace_id: int) -> int:
     return int(cur.rowcount or 0)
 
 
+def session_scope_label() -> str:
+    """Nhãn cho phạm vi "phiên", sinh từ chế độ đang chạy. Xem `OperationPreview`."""
+    if _driver.is_postgres():
+        return f"Cho tới khi đóng tab này (tối đa {SESSION_TTL_HOURS} giờ)"
+    return "Cho tới khi đóng ứng dụng"
+
+
 def consent_state(workspace_id: int) -> dict[str, Any]:
-    """Hồ sơ này đang cho phép những gì."""
+    """Hồ sơ này đang cho phép những gì — CHO NGƯỜI ĐANG GỌI, trong PHIÊN ĐANG MỞ."""
+    user = request_user()
+    session = request_session_id()
+
+    sql = """
+        SELECT scope, destination, provider, operation_id, granted_at, expires_at
+        FROM consent_grants
+        WHERE workspace_id = ? AND expires_at > datetime('now')
+    """
+    params: list[Any] = [workspace_id]
+    if user is not None:
+        # Cùng điều kiện lọc với `_has_grant`. Lệch nhau thì màn Bảo mật sẽ hiện những
+        # quyền mà thực tế gateway không dùng, hoặc giấu đi quyền mà nó có dùng — cả hai
+        # chiều đều là nói sai về thứ hệ thống đang cho phép.
+        sql += " AND user_id = ? AND (scope = 'operation' OR client_session_id = ?)"
+        params.extend([user.user_id, session or ""])
+    sql += " ORDER BY granted_at DESC"
+
     with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT scope, destination, provider, operation_id, granted_at, expires_at
-            FROM consent_grants
-            WHERE workspace_id = ? AND expires_at > datetime('now')
-            ORDER BY granted_at DESC
-            """,
-            (workspace_id,),
-        ).fetchall()
-    return {"grants": [dict(r) for r in rows], "n_active": len(rows)}
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    return {
+        "grants": [dict(r) for r in rows],
+        "n_active": len(rows),
+        "session_scope_label": session_scope_label(),
+    }
 
 
 # ============================== Thao tác ==============================
@@ -685,13 +771,22 @@ def execute(req: EgressRequest, **kwargs: Any) -> Any:
 def recent_log(workspace_id: int | None = None, limit: int = 300) -> list[dict[str, Any]]:
     sql = """
         SELECT id, workspace_id, module, destination, provider, endpoint, n_chars,
-               summary, status, error_class, operation_id, created_at
+               summary, status, error_class, operation_id, user_id, created_at
         FROM egress_log
     """
-    params: tuple[Any, ...] = ()
+    where: list[str] = []
+    params_list: list[Any] = []
     if workspace_id is not None:
-        sql += " WHERE workspace_id = ?"
-        params = (workspace_id,)
+        where.append("workspace_id = ?")
+        params_list.append(workspace_id)
+    # "Xem toàn bộ hồ sơ" chỉ có nghĩa là toàn bộ hồ sơ CỦA MÌNH. Không có điều kiện này
+    # thì bỏ tick lọc hồ sơ là đọc được nhật ký gửi dữ liệu của người khác.
+    if (uid := _identity_user_id()) is not None:
+        where.append("user_id = ?")
+        params_list.append(uid)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    params: tuple[Any, ...] = tuple(params_list)
     sql += " ORDER BY id DESC LIMIT ?"
     params = params + (limit,)
     with get_conn() as conn:

@@ -68,6 +68,8 @@ class EgressPreviewOut(BaseModel):
     operation_kind: str
     declares: list[dict[str, object]]
     scope_note: str
+    session_scope_label: str = "Cho tới khi đóng ứng dụng"
+    session_scope_note: str = ""
     payload_excerpt: str
     # False = thao tác nhiều lệnh gọi, nội dung do các bước bên trong sinh ra nên chưa
     # biết trước. Hộp thoại PHẢI nói rõ điều đó thay vì hiện một khối rỗng.

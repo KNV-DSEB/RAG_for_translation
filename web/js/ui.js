@@ -271,14 +271,17 @@ export function consentDialog(preview) {
           text: "Không gửi",
           onclick: () => done(null),
         }),
-        el("button.btn.btn-ghost", {
-          type: "button",
-          text: "Cho tới khi đóng ứng dụng",
-          title:
-            "Chỉ áp dụng cho đúng những dịch vụ liệt kê ở trên, và hết hiệu lực khi bạn " +
-            "đóng ứng dụng.",
-          onclick: () => done("session"),
-        }),
+          // Câu chữ do MÁY CHỦ cấp. Trên máy cá nhân quyền phiên chết khi tiến trình
+          // tắt; trên cloud nó gắn với phiên trình duyệt và tự hết hạn. Viết cứng ở đây
+          // thì một trong hai trường hợp sẽ là nói dối, mà ta không biết là trường hợp nào.
+          el("button.btn.btn-ghost", {
+            type: "button",
+            text: preview.session_scope_label ?? "Cho tới khi đóng ứng dụng",
+            title:
+              "Chỉ áp dụng cho đúng những dịch vụ liệt kê ở trên. " +
+              (preview.session_scope_note ?? ""),
+            onclick: () => done("session"),
+          }),
         el("button.btn.btn-primary", {
           type: "button",
           text: "Chỉ thao tác này",

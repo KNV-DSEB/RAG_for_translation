@@ -221,12 +221,26 @@ def test_c7b_rejects_unknown_scope(secret_workspace: int) -> None:
         gateway.grant_from_pending("bat-ky", "forever")
 
 
-def test_c7c_session_grants_die_when_the_app_restarts(secret_workspace: int) -> None:
-    """C7c — nút ghi "cho tới khi đóng ứng dụng" thì phải đúng nghĩa đen.
+def test_c7c_pham_vi_phien_dung_nghia_o_TUNG_che_do(secret_workspace: int) -> None:
+    """C7c — nút phạm vi rộng phải nói đúng thứ hệ thống thật sự làm, ở CẢ HAI chế độ.
 
-    Quyền nằm trong SQLite nên nó sống qua cả lần tắt máy. `init_db()` chạy lúc khởi
-    động phải dọn sạch, nếu không cái nhãn đó là một lời hứa suông.
+    NGỮ NGHĨA ĐÃ ĐỔI KHI LÊN CLOUD, và test này đổi theo — có lý do, không phải để cho
+    xanh:
+
+    Trên MÁY CÁ NHÂN, "phiên" là lần chạy ứng dụng. Quyền nằm trong SQLite nên sống qua
+    cả lần tắt máy, vì vậy `init_db()` phải dọn lúc khởi động — nếu không thì nhãn "cho
+    tới khi đóng ứng dụng" là lời hứa suông. Phần này giữ nguyên như cũ.
+
+    Trên CLOUD thì làm vậy là SAI. Backend khởi động lại vì deploy, vì scale, vì crash —
+    toàn những việc chẳng liên quan gì tới chuyên gia. Xoá quyền theo vòng đời tiến trình
+    nghĩa là một lần deploy lúc nửa đêm âm thầm thu hồi quyền, và hai bản backend chạy
+    song song thì mỗi bản thấy một tập quyền khác nhau. Ở đó "phiên" là PHIÊN TRÌNH
+    DUYỆT: quyền gắn `client_session_id` và tự hết hạn theo `expires_at`.
+
+    Nên điều bất biến KHÔNG phải "quyền chết khi khởi động lại". Nó là: **nhãn trên nút
+    phải mô tả đúng thứ backend thực thi.** Test kiểm đúng điều đó ở từng chế độ.
     """
+    from backend.database import driver
     from backend.db import init_db
 
     with pytest.raises(gateway.ConsentRequired) as exc:
@@ -236,10 +250,63 @@ def test_c7c_session_grants_die_when_the_app_restarts(secret_workspace: int) -> 
     grant(exc.value.preview, scope="session")
     assert gateway.consent_state(secret_workspace)["n_active"] >= 1
 
-    init_db()   # giả lập lần khởi động sau
+    label = gateway.session_scope_label()
+    init_db()   # giả lập lần khởi động lại của máy chủ
+    remaining = [
+        g for g in gateway.consent_state(secret_workspace)["grants"] if g["scope"] == "session"
+    ]
 
-    remaining = gateway.consent_state(secret_workspace)["grants"]
-    assert not [g for g in remaining if g["scope"] == "session"]
+    if driver.is_postgres():
+        assert remaining, (
+            "Trên cloud, khởi động lại backend KHÔNG được thu hồi quyền: deploy và scale "
+            "là việc của hạ tầng, không phải quyết định của chuyên gia."
+        )
+        assert "tab" in label.lower() and "giờ" in label.lower(), (
+            f"nhãn “{label}” không nói đúng ngữ nghĩa cloud (phiên trình duyệt + thời hạn)"
+        )
+    else:
+        assert not remaining, (
+            "Trên máy cá nhân, nhãn “cho tới khi đóng ứng dụng” phải đúng nghĩa đen."
+        )
+        assert label == "Cho tới khi đóng ứng dụng"
+
+
+def test_c7c2_quyen_phien_khong_dung_chung_giua_hai_phien_trinh_duyet(
+    secret_workspace: int,
+) -> None:
+    """Quyền cấp trong phiên trình duyệt A không được dùng ở phiên B.
+
+    Không có ràng buộc này thì một tab khác — hoặc một thiết bị khác của cùng người —
+    dùng lại được quyền mà chủ nhân tưởng đã đóng lại khi tắt tab.
+    """
+    from backend.auth.context import set_request_identity
+    from backend.auth.verify import AuthUser
+    from backend.database import driver
+
+    if not driver.is_postgres():
+        pytest.skip("phạm vi theo phiên trình duyệt chỉ áp dụng khi chạy trên cloud")
+
+    user = AuthUser(user_id="user-mot", email="a@b.test")
+
+    set_request_identity(user, "phien-A")
+    with pytest.raises(gateway.ConsentRequired) as exc:
+        with gateway.operation(secret_workspace, kind="test.sess2",
+                               declares=declares(), fingerprint="fp-s2"):
+            pass
+    grant(exc.value.preview, scope="session")
+    assert gateway.consent_state(secret_workspace)["n_active"] >= 1, "phiên A phải có quyền"
+
+    set_request_identity(user, "phien-B")
+    assert gateway.consent_state(secret_workspace)["n_active"] == 0, (
+        "phiên B thấy quyền của phiên A"
+    )
+
+    set_request_identity(AuthUser(user_id="user-hai", email="c@d.test"), "phien-A")
+    assert gateway.consent_state(secret_workspace)["n_active"] == 0, (
+        "người khác dùng lại được quyền chỉ vì trùng mã phiên"
+    )
+
+    set_request_identity(None, None)
 
 
 # ============================== C7d ==============================

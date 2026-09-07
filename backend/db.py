@@ -459,9 +459,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # và giữ lại thì mang theo đúng cái ngữ nghĩa đang phải bỏ.
     conn.execute("DROP TABLE IF EXISTS consent_tickets")
 
-    # "Cho tới khi đóng ứng dụng" phải đúng nghĩa đen. Quyền phiên nằm trong SQLite nên
-    # nó sống qua cả lần tắt máy — xoá lúc khởi động thì cái nhãn mới thành sự thật.
-    conn.execute("DELETE FROM consent_grants WHERE scope = 'session'")
+    # Quyền phiên: xử lý KHÁC NHAU giữa hai chế độ, và khác nhau vì lý do thật.
+    #
+    # Trên MÁY CÁ NHÂN, "phiên" là lần chạy ứng dụng. Xoá lúc khởi động thì nhãn "cho
+    # tới khi đóng ứng dụng" đúng nghĩa đen.
+    #
+    # Trên CLOUD thì không được làm vậy. Backend khởi động lại vì deploy, vì scale, vì
+    # crash — toàn những việc chẳng liên quan gì tới chuyên gia. Xoá quyền theo vòng đời
+    # tiến trình nghĩa là một lần deploy lúc nửa đêm sẽ âm thầm thu hồi quyền, còn hai
+    # bản backend chạy song song thì mỗi bản lại thấy một tập quyền khác nhau.
+    # Trên cloud, phiên là PHIÊN TRÌNH DUYỆT: quyền gắn với `client_session_id` và tự
+    # hết hạn sau `expires_at`. Giao diện phải nói đúng thế — "trong phiên trình duyệt
+    # này, tối đa 8 giờ" — chứ không nói "cho tới khi đóng ứng dụng".
+    if not driver.is_postgres():
+        conn.execute("DELETE FROM consent_grants WHERE scope = 'session'")
+
+    # Quyền đã hết hạn thì dọn ở cả hai chế độ — chúng vô dụng và chỉ làm nhật ký rối.
+    conn.execute("DELETE FROM consent_grants WHERE expires_at <= datetime('now')")
 
     # Thao tác dở dang và challenge quá hạn không có lý do gì tồn tại qua lần chạy sau.
     conn.execute("DELETE FROM pending_consents WHERE used = 1 OR expires_at <= datetime('now')")
